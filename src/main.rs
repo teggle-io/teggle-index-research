@@ -3,27 +3,30 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use std::borrow::Borrow;
-    use std::{fs};
-    use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+    //use std::borrow::Borrow;
+    //use std::{fs};
+    //use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
     use std::time::SystemTime;
     use uuid::Uuid;
 
-    use indradb::{BulkInsertItem, Datastore, EdgeKey, Vertex, VertexQueryExt};
-    use rocksdb::{DB, DBCompactionStyle, Options};
+    use indradb::{BulkInsertItem, Datastore, EdgeKey, Transaction, Vertex, VertexQueryExt};
+    //use rocksdb::{DB, DBCompactionStyle, Options};
 
-    #[test]
+    /*
+    //#[test]
     fn sled_test() {
         let db = sled::open("./sled.db")
             .expect("failed to open sled db");
 
-        //let total_keys = 2000000_u64;
-        let total_keys = 100000_u64;
+        let total_keys = 2000000_u64;
 
-        let mut keys: Vec<String> = Vec::new();
+        let mut keys: Vec<[u8; 11]> = Vec::new();
 
         for i in 0..total_keys {
-            keys.push(format!("key.{}", i));
+            let mut val: [u8; 11] = Default::default();
+            val.copy_from_slice(format!("key.{:0>7}", i).as_bytes());
+
+            keys.push(val);
         }
 
         let start = SystemTime::now();
@@ -31,8 +34,8 @@ mod tests {
         let mut batch = sled::Batch::default();
 
         for k in keys.iter() {
-            batch.insert(k.as_bytes(), k.as_bytes())
-            //.expect("failed to insert");
+            batch.insert(k, k)
+                //.expect("failed to insert");
         }
 
         db.apply_batch(batch)
@@ -49,7 +52,7 @@ mod tests {
         let start = SystemTime::now();
 
         for k in keys.iter() {
-            let _val = db.get(k.as_bytes()).expect("failed to get");
+            let _val = db.get(k).expect("failed to get");
         }
 
         let end = SystemTime::now();
@@ -79,17 +82,19 @@ mod tests {
 
         let total_keys = 2000000_u64;
 
-        let mut keys: Vec<String> = Vec::new();
+        let mut keys: Vec<[u8; 11]> = Vec::new();
 
         for i in 0..total_keys {
-            keys.push(format!("key.{}", i));
+            let mut val: [u8; 11] = Default::default();
+            val.copy_from_slice(format!("key.{:0>7}", i).as_bytes());
+
+            keys.push(val);
         }
 
-        /*
         let start = SystemTime::now();
 
         for k in keys.iter() {
-            db.put(k.as_bytes(), k.as_bytes())
+            db.put(k, k)
                 .expect("failed to put");
         }
 
@@ -100,12 +105,11 @@ mod tests {
         let taken_ms = elapsed.unwrap_or_default().as_millis();
 
         println!("rocks set: {taken_ms}ms ({}/sec)", (total_keys  * 1000) as u128 / taken_ms);
-         */
 
         let start = SystemTime::now();
 
         for k in keys.iter() {
-            let _val = db.get(k.as_bytes()).expect("failed to get");
+            let _val = db.get(k).expect("failed to get");
         }
 
         let end = SystemTime::now();
@@ -115,7 +119,8 @@ mod tests {
         println!("rocks get: {taken_ms}ms ({}/sec)", (total_keys  * 1000) as u128 / taken_ms);
     }
 
-    /*
+     */
+
     #[test]
     fn create_and_read_graph() {
         let total_users = 5000_u64;
@@ -124,18 +129,18 @@ mod tests {
         //let total_friends = 2_u64;
 
         // Indra
-        let person_type = indradb::Identifier::new("person").unwrap(); // Entity
-        //let person_type = indradb::Type::new("person").unwrap(); // Entity
-        let friend_type = indradb::Identifier::new("friend").unwrap(); // Link
-        //let friend_type = indradb::Type::new("friend").unwrap(); // Link
+        //let person_type = indradb::Identifier::new("person").unwrap(); // Entity
+        let person_type = indradb::Type::new("person").unwrap(); // Entity
+        //let friend_type = indradb::Identifier::new("friend").unwrap(); // Link
+        let friend_type = indradb::Type::new("friend").unwrap(); // Link
 
         let start = SystemTime::now();
 
-        let mut ds = indradb::RocksdbDatastore::new("./indra.rocks.db", None)
-            .expect("failed to create indra rocks db");
+        //let mut ds = indradb::RocksdbDatastore::new("./indra.rocks.db", None)
+        //    .expect("failed to create indra rocks db");
 
-        //let mut ds = indradb_sled::SledDatastore::new("./indra.sled.db")
-        //    .expect("failed to create indra sled db");
+        let ds = indradb_sled::SledDatastore::new("./indra.sled.db")
+            .expect("failed to create indra sled db");
 
         //let mut ds = indradb::MemoryDatastore::create("/tmp/indra.db")
         //    .expect("failed to create indra ds");
@@ -196,7 +201,7 @@ mod tests {
         // Insert
         let start = SystemTime::now();
 
-        ds.bulk_insert(inserts).expect("failed to insert");
+        ds.bulk_insert(inserts.into_iter()).expect("failed to insert");
 
         let end = SystemTime::now();
         let elapsed = end.duration_since(start);
@@ -205,13 +210,16 @@ mod tests {
         println!("graph inserted: {taken_ms}ms");
 
          */
-
+        
         let start = SystemTime::now();
+
+        let tx = ds.transaction()
+            .expect("failed to get transaction");
 
         for u in users.iter() {
             let specific_u = indradb::SpecificVertexQuery::single(u.clone());
 
-            let _edges = ds.get_edges(specific_u.outbound().t(friend_type.clone()).into())
+            let _edges = tx.get_edges(specific_u.outbound().t(friend_type.clone()))
                 .expect("failed to get edges");
         }
 
@@ -224,9 +232,8 @@ mod tests {
         //sleep(time::Duration::from_millis(10000));
     }
 
-     */
 
-
+    /*
     #[test]
     fn create_and_read_feed() {
         let header = "DUMMY[head:0]"; // Header to store current head position.
@@ -378,4 +385,6 @@ mod tests {
             println!("read feed file: {taken_ms}ms ({}/s)", (total_entries as u128 * 1000) / taken_ms)
         }
     }
+
+     */
 }

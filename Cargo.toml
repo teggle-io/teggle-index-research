@@ -5,11 +5,35 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[profile.dev]
+opt-level = 3
+debug = false
+debug-assertions = false
+overflow-checks = false
+lto = "fat"
+panic = 'unwind'
+incremental = false
+codegen-units = 16
+rpath = false
+
+[profile.release]
+opt-level = 3
+debug = false
+debug-assertions = false
+overflow-checks = false
+lto = "fat"
+panic = 'unwind'
+incremental = false
+codegen-units = 16
+rpath = false
+
 [dependencies]
-sled = "0.34.7"
-indradb-lib = { version = "3.0.1", features = ["rocksdb-datastore"] }
-#indradb-sled = "0.1.0"
+#indradb-lib = { version = "3.0.1", features = ["rocksdb-datastore"] }
 rocksdb = "0.17.0"
+
+indradb-lib = { version = "2.2.0", default-features = false }
+indradb-sled = "0.1.0"
+sled = "0.34.7"
 
 [dependencies.uuid]
 version = "0"
