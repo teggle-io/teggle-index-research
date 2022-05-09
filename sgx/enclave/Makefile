@@ -16,9 +16,7 @@
 # under the License.
 Rust_Enclave_Name := libenclave.a
 Rust_Enclave_Files := $(wildcard src/*.rs)
-# TODO:
-#Rust_Target_Path := $(CURDIR)/../../../xargo
-Rust_Target_Path := /root/sgx/incubator-teaclave-sgx-sdk/xargo
+Rust_Target_Path := $(CURDIR)/../thirdparty/vendor/xargo
 
 ifeq ($(MITIGATION-CVE-2020-0551), LOAD)
 export MITIGATION_CVE_2020_0551=LOAD
@@ -33,8 +31,8 @@ all: $(Rust_Enclave_Name)
 $(Rust_Enclave_Name): $(Rust_Enclave_Files)
 ifeq ($(XARGO_SGX), 1)
 	RUST_TARGET_PATH=$(Rust_Target_Path) xargo build --target x86_64-unknown-linux-sgx --release
-	cp ./target/x86_64-unknown-linux-sgx/release/libhelloworldsampleenclave.a ../lib/libenclave.a
+	cp ./target/x86_64-unknown-linux-sgx/release/libindex_enclave.a ../lib/libenclave.a
 else
 	cargo build --release
-	cp ./target/release/libhelloworldsampleenclave.a ../lib/libenclave.a
+	cp ./target/release/libindex_enclave.a ../lib/libenclave.a
 endif

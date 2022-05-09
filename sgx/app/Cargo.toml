@@ -1,7 +1,7 @@
 [package]
-name = "app"
-version = "1.0.0"
-authors = ["The Teaclave Authors"]
+name = "index-node"
+version = "0.1.0"
+authors = ["David Radunz <david@teggle.com>"]
 build = "build.rs"
 
 [dependencies]

@@ -124,6 +124,7 @@ fn main() {
     opts.set_max_bytes_for_level_multiplier(8.0);
 
     unsafe {
+        // TODO: Remove expect.
         ROCKS_DB = Some(DB::open(&opts, "./rocks.db")
             .expect("failed to open rocks db"));
     }

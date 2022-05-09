@@ -1,10 +1,10 @@
 [package]
-name = "Helloworldsampleenclave"
-version = "1.0.0"
-authors = ["The Teaclave Authors"]
+name = "index-enclave"
+version = "0.1.0"
+authors = ["David Radunz <david@teggle.com>"]
 
 [lib]
-name = "helloworldsampleenclave"
+name = "index_enclave"
 crate-type = ["staticlib"]
 
 [features]

@@ -29,6 +29,8 @@ Cargo.lock
 **/*_t.c
 **/*_t.h
 **/bin/app
+**/bin/index-node
+**/bin/core
 
 **/target
 
@@ -39,4 +41,3 @@ Cargo.lock
 *.gz
 *.core
 
-bin/core
