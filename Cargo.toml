@@ -1,7 +1,7 @@
 [package]
 name = "teggle-index-research"
 version = "0.1.0"
-edition = "2021"
+edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -31,9 +31,11 @@ rpath = false
 #indradb-lib = { version = "3.0.1", features = ["rocksdb-datastore"] }
 rocksdb = "0.17.0"
 
-indradb-lib = { version = "2.2.0", default-features = false }
-indradb-sled = "0.1.0"
-sled = "0.34.7"
+#indradb-lib = { version = "2.2.0", default-features = false }
+#indradb-sled = "0.1.0"
+#sled = "0.34.7"
+
+rusty-leveldb = "0.3.6"
 
 [dependencies.uuid]
 version = "0"

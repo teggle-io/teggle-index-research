@@ -1,4 +1,66 @@
+use std::time::SystemTime;
+use rocksdb::{DB, DBCompactionStyle, DBCompressionType, Options};
+use uuid::Uuid;
+
 fn main() {
+    let mut opts = Options::default();
+    opts.create_if_missing(true);
+    opts.set_compaction_style(DBCompactionStyle::Level);
+    opts.set_write_buffer_size(67_108_864); // 64mb
+    opts.set_max_write_buffer_number(3);
+    opts.set_target_file_size_base(67_108_864); // 64mb
+    opts.set_level_zero_file_num_compaction_trigger(8);
+    opts.set_level_zero_slowdown_writes_trigger(17);
+    opts.set_level_zero_stop_writes_trigger(24);
+    opts.set_num_levels(4);
+    opts.set_max_bytes_for_level_base(536_870_912); // 512mb
+    opts.set_max_bytes_for_level_multiplier(8.0);
+
+    let db = DB::open(&opts, "./rocks.db")
+        .expect("failed to open rocks db");
+
+    let total_keys = 2000000_u64;
+
+    let mut keys: Vec<[u8; 32]> = Vec::new();
+
+    let key_ns = Uuid::parse_str("21a117c5-8ec5-417f-974a-9ff9441f754d").unwrap();
+
+    for i in 0..total_keys {
+        let i_bytes = i.to_be_bytes();
+        let cur_key = Uuid::new_v5(&key_ns, &i_bytes);
+
+        let mut val: [u8; 32] = Default::default();
+        val.copy_from_slice(format!("{}", cur_key.to_simple().to_string()).as_bytes());
+
+        keys.push(val);
+    }
+
+    let start = SystemTime::now();
+
+    for k in keys.iter() {
+        db.put(k, k)
+            .expect("failed to put");
+    }
+
+    db.flush().expect("failed to flush");
+
+    let end = SystemTime::now();
+    let elapsed = end.duration_since(start);
+    let taken_ms = elapsed.unwrap_or_default().as_millis();
+
+    println!("rocks set: {}ms ({}/sec)", taken_ms, (total_keys  * 1000) as u128 / taken_ms);
+
+    let start = SystemTime::now();
+
+    for k in keys.iter() {
+        let _val = db.get(k).expect("failed to get");
+    }
+
+    let end = SystemTime::now();
+    let elapsed = end.duration_since(start);
+    let taken_ms = elapsed.unwrap_or_default().as_millis();
+
+    println!("rocks get: {}ms ({}/sec)", taken_ms, (total_keys  * 1000) as u128 / taken_ms);
 }
 
 #[cfg(test)]
@@ -9,22 +71,26 @@ mod tests {
     use std::time::SystemTime;
     use uuid::Uuid;
 
-    use indradb::{BulkInsertItem, Datastore, EdgeKey, Transaction, Vertex, VertexQueryExt};
-    //use rocksdb::{DB, DBCompactionStyle, Options};
+    //use indradb::{BulkInsertItem, Datastore, EdgeKey, Transaction, Vertex, VertexQueryExt};
+    use rocksdb::{DB, DBCompactionStyle, Options};
 
     /*
-    //#[test]
+    #[test]
     fn sled_test() {
         let db = sled::open("./sled.db")
             .expect("failed to open sled db");
 
         let total_keys = 2000000_u64;
 
-        let mut keys: Vec<[u8; 11]> = Vec::new();
+        let mut keys: Vec<[u8; 32]> = Vec::new();
+
+        let key_ns = Uuid::parse_str("21a117c5-8ec5-417f-974a-9ff9441f754d").unwrap();
 
         for i in 0..total_keys {
-            let mut val: [u8; 11] = Default::default();
-            val.copy_from_slice(format!("key.{:0>7}", i).as_bytes());
+            let cur_key = Uuid::new_v5(&key_ns, i.to_be_bytes().as_slice());
+
+            let mut val: [u8; 32] = Default::default();
+            val.copy_from_slice(format!("{}", cur_key.to_simple().to_string()).as_bytes());
 
             keys.push(val);
         }
@@ -62,7 +128,9 @@ mod tests {
         println!("sled get: {taken_ms}ms ({}/sec)", (total_keys  * 1000) as u128 / taken_ms);
     }
 
-    //#[test]
+     */
+
+    #[test]
     fn rocks_test() {
         let mut opts = Options::default();
         opts.create_if_missing(true);
@@ -82,15 +150,20 @@ mod tests {
 
         let total_keys = 2000000_u64;
 
-        let mut keys: Vec<[u8; 11]> = Vec::new();
+        let mut keys: Vec<[u8; 32]> = Vec::new();
+
+        let key_ns = Uuid::parse_str("21a117c5-8ec5-417f-974a-9ff9441f754d").unwrap();
 
         for i in 0..total_keys {
-            let mut val: [u8; 11] = Default::default();
-            val.copy_from_slice(format!("key.{:0>7}", i).as_bytes());
+            let cur_key = Uuid::new_v5(&key_ns, i.to_be_bytes().as_slice());
+
+            let mut val: [u8; 32] = Default::default();
+            val.copy_from_slice(format!("{}", cur_key.to_simple().to_string()).as_bytes());
 
             keys.push(val);
         }
 
+        /*
         let start = SystemTime::now();
 
         for k in keys.iter() {
@@ -106,6 +179,7 @@ mod tests {
 
         println!("rocks set: {taken_ms}ms ({}/sec)", (total_keys  * 1000) as u128 / taken_ms);
 
+         */
         let start = SystemTime::now();
 
         for k in keys.iter() {
@@ -119,8 +193,68 @@ mod tests {
         println!("rocks get: {taken_ms}ms ({}/sec)", (total_keys  * 1000) as u128 / taken_ms);
     }
 
+    /*
+    #[test]
+    fn leveldb_test() {
+        let opt = rusty_leveldb::Options::default();
+        let mut db = DB::open("./level.db", opt)
+            .expect("failed to open sled db");
+
+        let total_keys = 2000000_u64;
+
+        let mut keys: Vec<[u8; 32]> = Vec::new();
+
+        let key_ns = Uuid::parse_str("21a117c5-8ec5-417f-974a-9ff9441f754d").unwrap();
+
+        for i in 0..total_keys {
+            let cur_key = Uuid::new_v5(&key_ns, i.to_be_bytes().as_slice());
+
+            let mut val: [u8; 32] = Default::default();
+            val.copy_from_slice(format!("{}", cur_key.to_simple().to_string()).as_bytes());
+
+            keys.push(val);
+        }
+
+        let start = SystemTime::now();
+
+        for k in keys.iter() {
+            db.put(k, k).unwrap();
+        }
+
+        db.flush().unwrap();
+
+        let end = SystemTime::now();
+        let elapsed = end.duration_since(start);
+        let taken_ms = elapsed.unwrap_or_default().as_millis();
+
+        println!("leveldb set: {taken_ms}ms ({}/sec)", (total_keys  * 1000) as u128 / taken_ms);
+
+        let start = SystemTime::now();
+
+        db.compact_range(keys.iter().next().unwrap(),
+                         keys.iter().next_back().unwrap()).unwrap();
+
+        let end = SystemTime::now();
+        let elapsed = end.duration_since(start);
+        let taken_ms = elapsed.unwrap_or_default().as_millis();
+
+        println!("leveldb compacted: {taken_ms}ms ({}/sec)", (total_keys  * 1000) as u128 / taken_ms);
+
+        let start = SystemTime::now();
+
+        for k in keys.iter() {
+            let _val = db.get(k).unwrap().as_slice();
+        }
+
+        let end = SystemTime::now();
+        let elapsed = end.duration_since(start);
+        let taken_ms = elapsed.unwrap_or_default().as_millis();
+
+        println!("leveldb get: {taken_ms}ms ({}/sec)", (total_keys  * 1000) as u128 / taken_ms);
+    }
      */
 
+    /*
     #[test]
     fn create_and_read_graph() {
         let total_users = 5000_u64;
@@ -210,7 +344,7 @@ mod tests {
         println!("graph inserted: {taken_ms}ms");
 
          */
-        
+
         let start = SystemTime::now();
 
         let tx = ds.transaction()
@@ -231,7 +365,7 @@ mod tests {
 
         //sleep(time::Duration::from_millis(10000));
     }
-
+     */
 
     /*
     #[test]
