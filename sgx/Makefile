@@ -108,7 +108,7 @@ RustEnclave_Name := enclave/enclave.so
 Signed_RustEnclave_Name := bin/enclave.signed.so
 
 .PHONY: all
-all: $(App_Name) $(Signed_RustEnclave_Name)
+all: enclave-ffi-types.h $(App_Name) $(Signed_RustEnclave_Name)
 
 ######## EDL Objects ########
 
@@ -148,9 +148,15 @@ $(Signed_RustEnclave_Name): $(RustEnclave_Name)
 	@echo "SIGN =>  $@"
 
 .PHONY: enclave
-enclave:
+enclave: enclave-ffi-types.h
 	$(MAKE) -C ./enclave/
 
+FFI_TYPES_SOURCES := $(shell find "./ffi-types" -type f)
+./ffi-types/target/headers/enclave-ffi-types.h: $(FFI_TYPES_SOURCES)
+	cd ./ffi-types && cargo check --features "build_headers"
+
+enclave-ffi-types.h: ./ffi-types/target/headers/enclave-ffi-types.h
+	cp ./ffi-types/target/headers/enclave-ffi-types.h ./ffi-types
 
 .PHONY: clean
 clean:

@@ -22,6 +22,9 @@ enclave {
     from "sgx_tstdc.edl" import *;
     from "sgx_tprotected_fs.edl" import *;
 
+    // This header is generated during the build of enclave-ffi-types
+    include "../ffi-types/enclave-ffi-types.h"
+
     trusted {
         /* define ECALLs here. */
 

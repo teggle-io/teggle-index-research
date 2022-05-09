@@ -11,6 +11,7 @@ crate-type = ["staticlib"]
 default = []
 
 [dependencies]
+enclave-ffi-types = { path = "../ffi-types" }
 uuid = { git = "https://github.com/mesalock-linux/uuid-sgx.git", features = ["v5"] }
 #protected_fs_rs = { git = "https://github.com/mesalock-linux/protected_fs_rs" }
 
