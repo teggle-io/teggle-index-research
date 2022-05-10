@@ -21,14 +21,17 @@
 #![cfg_attr(not(target_env = "sgx"), no_std)]
 #![cfg_attr(target_env = "sgx", feature(rustc_private))]
 
-//extern crate rusty_leveldb;
 #[cfg(not(target_env = "sgx"))]
 #[macro_use]
 extern crate sgx_tstd as std;
 extern crate sgx_types;
+extern crate sgx_trts;
 extern crate uuid;
+extern crate enclave_ffi_types;
+extern crate lazy_static;
+extern crate alloc;
 
-//use rusty_leveldb::{DB, Options};
+use alloc::string::ToString;
 use sgx_types::*;
 use std::io::{self, Write};
 use std::slice;
@@ -37,126 +40,97 @@ use std::string::String;
 //use std::sgxfs::SgxFile;
 use std::vec::Vec;
 use uuid::Uuid;
+use enclave_ffi_types::{Ctx, EnclaveBuffer, OcallReturn};
+use external::ecalls::recover_buffer;
+use external::ocalls::{ocall_db_flush, ocall_db_get, ocall_db_put};
 
-extern "C" {
-    pub fn ocall_storage_set(
-        ret_val: *mut sgx_status_t,
-        p_key: *const u8,
-        key_len: usize,
-        p_value: *const u8,
-        value_len: usize,
-    ) -> sgx_status_t;
+mod utils;
+pub mod external;
 
-    pub fn ocall_storage_get(
-        ret_val: *mut sgx_status_t,
-        p_key: *const u8,
-        key_len: usize,
-        value: *mut u8,
-        value_max_len: usize
-    ) -> sgx_status_t;
-
-    pub fn ocall_storage_flush(
-        ret_val: *mut sgx_status_t
-    ) -> sgx_status_t;
-}
-
-fn storage_set(key: &[u8], value: &[u8]) -> Result<(), sgx_status_t> {
-    let mut rt : sgx_status_t = sgx_status_t::SGX_ERROR_UNEXPECTED;
+// TODO: Move these.
+fn db_put(context: Ctx, key: &[u8], value: &[u8]) -> Result<(), String> {
+    let mut ocall_return = OcallReturn::Success;
 
     let result = unsafe {
-        ocall_storage_set(&mut rt as *mut sgx_status_t,
-                    key.as_ptr(),
-                    key.len(),
-                    value.as_ptr(),
-                    value.len())
+        ocall_db_put(
+            (&mut ocall_return) as *mut _,
+            context.unsafe_clone(),
+            key.as_ptr(),
+            key.len(),
+            value.as_ptr(),
+            value.len())
     };
 
     if result != sgx_status_t::SGX_SUCCESS {
-        return Err(result);
+        return Err(result.to_string());
     }
-    if rt != sgx_status_t::SGX_SUCCESS {
-        println!("ocall_storage_set returned {}", rt);
-        return Err(rt);
+    if ocall_return != OcallReturn::Success {
+        // TODO:
+        println!("ocall_db_put returned {}", ocall_return);
+        return Err("Ocall Fail (TODO ERR)".into_string());
     }
 
     Ok(())
 }
 
-fn storage_get(key: &[u8]) -> Result<(), sgx_status_t> {
-    let mut rt : sgx_status_t = sgx_status_t::SGX_ERROR_UNEXPECTED;
+fn db_get(context: Ctx, key: &[u8]) -> Result<(), String> {
+    let mut ocall_return = OcallReturn::Success;
 
-    let value_max_len: usize = 32;
-    // TODO:
-    // let mut enclave_buffer = std::mem::MaybeUninit::<EnclaveBuffer>::uninit();
-    let mut value: Vec<u8> = vec![0; value_max_len];
+    let mut enclave_buffer = std::mem::MaybeUninit::<EnclaveBuffer>::uninit();
 
     let result = unsafe {
-        ocall_storage_get(&mut rt as *mut sgx_status_t,
-                          key.as_ptr(),
-                          key.len(),
-                          value.as_mut_ptr(),
-                          value_max_len)
+        ocall_db_get(
+            (&mut ocall_return) as *mut _,
+            context.unsafe_clone(),
+            value.as_mut_ptr(),
+            key.as_ptr(),
+            key.len(),
+        )
     };
 
     if result != sgx_status_t::SGX_SUCCESS {
-        return Err(result);
+        return Err(result.to_string());
     }
-    if rt != sgx_status_t::SGX_SUCCESS {
-        println!("ocall_storage_set returned {}", rt);
-        return Err(rt);
+    if ocall_return != OcallReturn::Success {
+        // TODO:
+        println!("ocall_db_get returned {}", ocall_return);
+        return Err("Ocall Fail (TODO ERR)".into_string());
     }
+
+    let value = unsafe {
+        let enclave_buffer = enclave_buffer.assume_init();
+        recover_buffer(enclave_buffer)
+    }.expect("failed to recover buffer").unwrap(); // TODO: Remove expect
 
     println!("VALUE: {:?}", value);
 
     Ok(())
 }
 
-fn storage_flush() -> Result<(), sgx_status_t> {
-    let mut rt : sgx_status_t = sgx_status_t::SGX_ERROR_UNEXPECTED;
+fn db_flush(context: Ctx) -> Result<(), String> {
+    let mut ocall_return = OcallReturn::Success;
 
     let result = unsafe {
-        ocall_storage_flush(&mut rt as *mut sgx_status_t)
+        ocall_db_flush(
+            (&mut ocall_return) as *mut _,
+            context.unsafe_clone()
+        )
     };
 
     if result != sgx_status_t::SGX_SUCCESS {
-        return Err(result);
+        return Err(result.to_string());
     }
-    if rt != sgx_status_t::SGX_SUCCESS {
-        println!("ocall_storage_flush returned {}", rt);
-        return Err(rt);
+    if ocall_return != OcallReturn::Success {
+        // TODO:
+        println!("ocall_db_flush returned {}", ocall_return);
+        return Err("Ocall Fail (TODO ERR)".into_string());
     }
 
     Ok(())
 }
 
 #[no_mangle]
-pub extern "C" fn say_something(some_string: *const u8, some_len: usize) -> sgx_status_t {
-    let str_slice = unsafe { slice::from_raw_parts(some_string, some_len) };
-    let _ = io::stdout().write(str_slice);
-
-    // A sample &'static string
-    let rust_raw_string = "This is a in-Enclave ";
-    // An array
-    let word: [u8; 4] = [82, 117, 115, 116];
-    // An vector
-    let word_vec: Vec<u8> = vec![32, 115, 116, 114, 105, 110, 103, 33];
-
-    // Construct a string from &'static string
-    let mut hello_string = String::from(rust_raw_string);
-
-    // Iterate on word array
-    for c in word.iter() {
-        hello_string.push(*c as char);
-    }
-
-    // Rust style convertion
-    hello_string += String::from_utf8(word_vec).expect("Invalid UTF-8")
-        .as_str();
-
-    // Ocall to normal world for output
-    println!("{}", &hello_string);
-    println!("HERE");
-
+pub extern "C" fn perform_test(context: Ctx) -> sgx_status_t {
     /*
     let mut f = std::untrusted::fs::OpenOptions::new()
         .create(true)
@@ -188,17 +162,17 @@ pub extern "C" fn say_something(some_string: *const u8, some_len: usize) -> sgx_
         keys.push(val);
     }
 
-    /*
     for k in keys.iter() {
-        storage_set(k, k).expect("failed to set storage");
+        db_put(ctx, k, k).expect("failed to set storage");
     }
 
-    storage_flush().expect("failed to flush storage");
-     */
+    db_flush(ctx).expect("failed to flush storage");
 
+    /*
     for k in keys.iter() {
         storage_get(k).expect("failed to get storage");
     }
+     */
 
     sgx_status_t::SGX_SUCCESS
 }
