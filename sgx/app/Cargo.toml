@@ -4,11 +4,19 @@ version = "0.1.0"
 authors = ["David Radunz <david@teggle.com>"]
 build = "build.rs"
 
+[features]
+default = []
+production = []
+
 [dependencies]
 sgx_types = { rev = "v1.1.3", git = "https://github.com/apache/teaclave-sgx-sdk.git" }
 sgx_urts = { rev = "v1.1.3", git = "https://github.com/apache/teaclave-sgx-sdk.git"}
 
 enclave-ffi-types = { path = "../ffi-types" }
+parking_lot = "0.11"
+num_cpus = "1.13.1"
 rocksdb = "0.17.0"
+lazy_static = "1.4"
+log = "0.4.8"
 
 [patch.'https://github.com/apache/teaclave-sgx-sdk.git']

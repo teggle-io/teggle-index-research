@@ -15,22 +15,26 @@
 // specific language governing permissions and limitations
 // under the License..
 
-extern crate enclave_ffi_types;
-extern crate rocksdb;
 extern crate sgx_types;
 extern crate sgx_urts;
+extern crate parking_lot;
+extern crate lazy_static;
+extern crate enclave_ffi_types;
+extern crate rocksdb;
+extern crate log;
+
+pub mod enclave;
+pub mod exports;
 
 use std::time::SystemTime;
+use log::trace;
 
 use rocksdb::{DB, DBCompactionStyle, Options};
 use sgx_types::*;
-use sgx_urts::SgxEnclave;
+use enclave::ENCLAVE_DOORBELL;
 
 use enclave_ffi_types::{Ctx, EnclaveBuffer, OcallReturn};
 
-pub mod exports;
-
-static ENCLAVE_FILE: &'static str = "enclave.signed.so";
 static mut ROCKS_DB: Option<DB> = None;
 
 // TODO: Move all of this.
@@ -155,20 +159,6 @@ fn ocall_db_flush(context: Ctx) -> OcallReturn {
     OcallReturn::Success
 }
 
-fn init_enclave() -> SgxResult<SgxEnclave> {
-    let mut launch_token: sgx_launch_token_t = [0; 1024];
-    let mut launch_token_updated: i32 = 0;
-    // call sgx_create_enclave to initialize an enclave instance
-    // Debug Support: set 2nd parameter to 1
-    let debug = 1;
-    let mut misc_attr = sgx_misc_attribute_t { secs_attr: sgx_attributes_t { flags: 0, xfrm: 0 }, misc_select: 0 };
-    SgxEnclave::create(ENCLAVE_FILE,
-                       debug,
-                       &mut launch_token,
-                       &mut launch_token_updated,
-                       &mut misc_attr)
-}
-
 fn main() {
     let mut opts = Options::default();
     opts.create_if_missing(true);
@@ -189,27 +179,18 @@ fn main() {
             .expect("failed to open rocks db"));
     }
 
-    let enclave = match init_enclave() {
-        Ok(r) => {
-            println!("[+] Init Enclave Successful {}!", r.geteid());
-            r
-        }
-        Err(x) => {
-            println!("[-] Init Enclave Failed {}!", x.as_str());
-            return;
-        }
-    };
+    let enclave_access_token = ENCLAVE_DOORBELL
+        .get_access(false) // This can never be recursive
+        .expect("failed to get access token (1)"); // TODO: remove expect
+    let enclave = enclave_access_token.expect("failed to get access token (2)");
 
-    let input_string = String::from("This is a normal world string passed into Enclave!\n");
     let mut retval = sgx_status_t::SGX_SUCCESS;
 
     let start = SystemTime::now();
 
     let result = unsafe {
         say_something(enclave.geteid(),
-                      &mut retval,
-                      input_string.as_ptr() as *const u8,
-                      input_string.len())
+                      &mut retval)
     };
 
     let end = SystemTime::now();
