@@ -23,6 +23,7 @@ extern crate rocksdb;
 extern crate sgx_types;
 extern crate sgx_urts;
 
+use std::ptr;
 use std::time::SystemTime;
 
 use log::trace;
@@ -102,6 +103,37 @@ fn ocall_db_get(
             .expect("failed to allocate buffer"); // TODO: REMOVE EXPECT
 
         unsafe { *value = enclave_buffer };
+    } else {
+        ret = OcallReturn::None
+    }
+
+    ret
+}
+
+#[no_mangle]
+pub extern "C"
+fn ocall_db_get_fixed(
+    key: *const u8,
+    key_len: usize,
+    value: *mut u8,
+    value_max_len: usize,
+    value_len: *mut usize
+) -> OcallReturn {
+    let mut ret = OcallReturn::Success;
+
+    let key = unsafe { std::slice::from_raw_parts(key, key_len) };
+
+    // TODO: Remove expect
+    if let Some(res) = DB.get(key).expect("failed to get") {
+        if res.len() > value_max_len {
+            ret = OcallReturn::TooBig
+        } else {
+            unsafe {
+                ptr::copy_nonoverlapping(res.as_ptr(), value, res.len());
+
+                *value_len = res.len();
+            }
+        }
     } else {
         ret = OcallReturn::None
     }

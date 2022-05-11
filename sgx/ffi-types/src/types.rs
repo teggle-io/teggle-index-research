@@ -84,6 +84,9 @@ pub enum OcallReturn {
     Success,
     /// Ocall returned successfully, but with no result.
     None,
+
+    /// Result too big for buffer
+    TooBig,
     /// Ocall failed for some reason.
     /// error parameters may be passed as out parameters.
     Failure,

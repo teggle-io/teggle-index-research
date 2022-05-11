@@ -44,7 +44,7 @@ use std::vec::Vec;
 use uuid::Uuid;
 use enclave_ffi_types::{EnclaveBuffer, OcallReturn};
 use external::ecalls::{recover_buffer};
-use external::ocalls::{ocall_db_flush, ocall_db_get, ocall_db_put};
+use external::ocalls::{ocall_db_flush, ocall_db_get, ocall_db_get_fixed, ocall_db_put};
 
 mod utils;
 pub mod external;
@@ -114,6 +114,39 @@ fn db_get(key: &[u8]) -> Result<Option<Vec<u8>>, String> {
 }
 
 #[allow(dead_code)]
+fn db_get_fixed(key: &[u8], max_bytes: usize) -> Result<Option<Vec<u8>>, String> {
+    let mut ocall_return = OcallReturn::Success;
+    let mut value = vec![0; max_bytes];
+    let mut value_len = 0 as usize;
+
+    let result = unsafe {
+        ocall_db_get_fixed(
+            (&mut ocall_return) as *mut _,
+            key.as_ptr(),
+            key.len(),
+            value.as_mut_ptr(),
+            max_bytes,
+            (&mut value_len) as *mut _,
+        )
+    };
+
+    if result != sgx_status_t::SGX_SUCCESS {
+        return Err(result.to_string());
+    }
+    return match ocall_return {
+        OcallReturn::Success => {
+            value.truncate(value_len);
+
+            Ok(Some(value))
+        },
+        OcallReturn::None => Ok(None),
+        _=> {
+            return Err(format!("ocall_db_get_fixed returned {:?}", ocall_return));
+        }
+    };
+}
+
+#[allow(dead_code)]
 fn db_flush() -> Result<(), String> {
     let mut ocall_return = OcallReturn::Success;
 
@@ -167,19 +200,20 @@ pub extern "C" fn perform_test() -> sgx_status_t {
         keys.push(val);
     }
 
+    /*
     for k in keys.iter() {
         db_put(k, k).expect("failed to set db");
     }
 
     db_flush().expect("failed to flush db");
-
-    /*
-    for k in keys.iter() {
-        let value = storage_get(k).expect("failed to get db");
-
-        println!("VALUE: {:?}", value.unwrap());
-    }
      */
+
+    for k in keys.iter() {
+        //let _value = db_get(k).expect("failed to get db");
+        let _value = db_get_fixed(k, 1024).expect("failed to get db");
+
+        //println!("VALUE: {:?}", value.unwrap());
+    }
 
     sgx_status_t::SGX_SUCCESS
 }

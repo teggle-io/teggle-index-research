@@ -48,6 +48,14 @@ enclave {
             uintptr_t key_len
         ) allow (ecall_allocate);
 
+        OcallReturn ocall_db_get_fixed(
+            [in, count=key_len] const uint8_t* key,
+            uintptr_t key_len,
+            [out, size=value_max_len] uint8_t* value,
+            uintptr_t value_max_len,
+            [out] uintptr_t* value_len
+        );
+
         OcallReturn ocall_db_delete(
             [in, count=key_len] const uint8_t* key,
             uintptr_t key_len

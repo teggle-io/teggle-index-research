@@ -15,6 +15,15 @@ extern "C" {
         key_len: usize,
     ) -> sgx_status_t;
 
+    pub fn ocall_db_get_fixed(
+        retval: *mut OcallReturn,
+        key: *const u8,
+        key_len: usize,
+        value: *mut u8,
+        value_max_len: usize,
+        value_len: *mut usize
+    ) -> sgx_status_t;
+
     pub fn ocall_db_delete(
         retval: *mut OcallReturn,
         key: *const u8,
