@@ -18,6 +18,8 @@
 #![crate_name = "index_enclave"]
 #![crate_type = "staticlib"]
 
+#![feature(try_reserve)]
+
 #![cfg_attr(not(target_env = "sgx"), no_std)]
 #![cfg_attr(target_env = "sgx", feature(rustc_private))]
 
@@ -26,35 +28,35 @@
 extern crate sgx_tstd as std;
 extern crate sgx_types;
 extern crate sgx_trts;
+
 extern crate uuid;
 extern crate enclave_ffi_types;
 extern crate lazy_static;
 extern crate alloc;
+extern crate log;
 
 use alloc::string::ToString;
 use sgx_types::*;
-use std::io::{self, Write};
-use std::slice;
 use std::string::String;
 //use std::untrusted::fs::File;
 //use std::sgxfs::SgxFile;
 use std::vec::Vec;
 use uuid::Uuid;
-use enclave_ffi_types::{Ctx, EnclaveBuffer, OcallReturn};
-use external::ecalls::recover_buffer;
+use enclave_ffi_types::{EnclaveBuffer, OcallReturn};
+use external::ecalls::{recover_buffer};
 use external::ocalls::{ocall_db_flush, ocall_db_get, ocall_db_put};
 
 mod utils;
 pub mod external;
 
 // TODO: Move these.
-fn db_put(context: Ctx, key: &[u8], value: &[u8]) -> Result<(), String> {
+#[allow(dead_code)]
+fn db_put(key: &[u8], value: &[u8]) -> Result<(), String> {
     let mut ocall_return = OcallReturn::Success;
 
     let result = unsafe {
         ocall_db_put(
             (&mut ocall_return) as *mut _,
-            context.unsafe_clone(),
             key.as_ptr(),
             key.len(),
             value.as_ptr(),
@@ -64,16 +66,17 @@ fn db_put(context: Ctx, key: &[u8], value: &[u8]) -> Result<(), String> {
     if result != sgx_status_t::SGX_SUCCESS {
         return Err(result.to_string());
     }
-    if ocall_return != OcallReturn::Success {
-        // TODO:
-        println!("ocall_db_put returned {}", ocall_return);
-        return Err("Ocall Fail (TODO ERR)".into_string());
-    }
 
-    Ok(())
+    return match ocall_return {
+        OcallReturn::Success => Ok(()),
+        _=> {
+            return Err(format!("ocall_db_put returned {:?}", ocall_return));
+        }
+    };
 }
 
-fn db_get(context: Ctx, key: &[u8]) -> Result<(), String> {
+#[allow(dead_code)]
+fn db_get(key: &[u8]) -> Result<Option<Vec<u8>>, String> {
     let mut ocall_return = OcallReturn::Success;
 
     let mut enclave_buffer = std::mem::MaybeUninit::<EnclaveBuffer>::uninit();
@@ -81,8 +84,7 @@ fn db_get(context: Ctx, key: &[u8]) -> Result<(), String> {
     let result = unsafe {
         ocall_db_get(
             (&mut ocall_return) as *mut _,
-            context.unsafe_clone(),
-            value.as_mut_ptr(),
+            enclave_buffer.as_mut_ptr(),
             key.as_ptr(),
             key.len(),
         )
@@ -91,46 +93,49 @@ fn db_get(context: Ctx, key: &[u8]) -> Result<(), String> {
     if result != sgx_status_t::SGX_SUCCESS {
         return Err(result.to_string());
     }
-    if ocall_return != OcallReturn::Success {
-        // TODO:
-        println!("ocall_db_get returned {}", ocall_return);
-        return Err("Ocall Fail (TODO ERR)".into_string());
-    }
+    return match ocall_return {
+        OcallReturn::Success => {
+            let value = unsafe {
+                let enclave_buffer = enclave_buffer.assume_init();
+                // TODO: not sure why map_err isn't working.
+                match recover_buffer(enclave_buffer) {
+                    Ok(v) => Ok(v),
+                    Err(_err) => Err("Failed to recover enclave buffer")
+                }
+            }?;
 
-    let value = unsafe {
-        let enclave_buffer = enclave_buffer.assume_init();
-        recover_buffer(enclave_buffer)
-    }.expect("failed to recover buffer").unwrap(); // TODO: Remove expect
-
-    println!("VALUE: {:?}", value);
-
-    Ok(())
+            Ok(value)
+        },
+        OcallReturn::None => Ok(None),
+        _=> {
+            return Err(format!("ocall_db_get returned {:?}", ocall_return));
+        }
+    };
 }
 
-fn db_flush(context: Ctx) -> Result<(), String> {
+#[allow(dead_code)]
+fn db_flush() -> Result<(), String> {
     let mut ocall_return = OcallReturn::Success;
 
     let result = unsafe {
         ocall_db_flush(
             (&mut ocall_return) as *mut _,
-            context.unsafe_clone()
         )
     };
 
     if result != sgx_status_t::SGX_SUCCESS {
         return Err(result.to_string());
     }
-    if ocall_return != OcallReturn::Success {
-        // TODO:
-        println!("ocall_db_flush returned {}", ocall_return);
-        return Err("Ocall Fail (TODO ERR)".into_string());
-    }
-
-    Ok(())
+    return match ocall_return {
+        OcallReturn::Success => Ok(()),
+        _=> {
+            return Err(format!("ocall_db_flush returned {:?}", ocall_return));
+        }
+    };
 }
 
 #[no_mangle]
-pub extern "C" fn perform_test(context: Ctx) -> sgx_status_t {
+pub extern "C" fn perform_test() -> sgx_status_t {
     /*
     let mut f = std::untrusted::fs::OpenOptions::new()
         .create(true)
@@ -163,14 +168,16 @@ pub extern "C" fn perform_test(context: Ctx) -> sgx_status_t {
     }
 
     for k in keys.iter() {
-        db_put(ctx, k, k).expect("failed to set storage");
+        db_put(k, k).expect("failed to set db");
     }
 
-    db_flush(ctx).expect("failed to flush storage");
+    db_flush().expect("failed to flush db");
 
     /*
     for k in keys.iter() {
-        storage_get(k).expect("failed to get storage");
+        let value = storage_get(k).expect("failed to get db");
+
+        println!("VALUE: {:?}", value.unwrap());
     }
      */
 

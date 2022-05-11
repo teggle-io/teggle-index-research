@@ -1,4 +1,4 @@
-use enclave_ffi_types::{Ctx, EnclaveBuffer, OcallReturn, UserSpaceBuffer};
+use enclave_ffi_types::{EnclaveBuffer, OcallReturn, UserSpaceBuffer};
 use sgx_types::*;
 
 extern "C" {
@@ -10,7 +10,6 @@ extern "C" {
 
     pub fn ocall_db_get(
         retval: *mut OcallReturn,
-        context: Ctx,
         value: *mut EnclaveBuffer,
         key: *const u8,
         key_len: usize,
@@ -18,14 +17,12 @@ extern "C" {
 
     pub fn ocall_db_delete(
         retval: *mut OcallReturn,
-        context: Ctx,
         key: *const u8,
         key_len: usize,
     ) -> sgx_status_t;
 
     pub fn ocall_db_put(
         retval: *mut OcallReturn,
-        context: Ctx,
         key: *const u8,
         key_len: usize,
         value: *const u8,
@@ -34,6 +31,5 @@ extern "C" {
 
     pub fn ocall_db_flush(
         retval: *mut OcallReturn,
-        context: Ctx,
     ) -> sgx_status_t;
 }

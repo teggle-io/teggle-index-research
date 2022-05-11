@@ -4,7 +4,7 @@
 mod types;
 
 pub use types::{
-    Ctx, EnclaveBuffer, EnclaveError, UserSpaceBuffer, HealthCheckResult, OcallReturn
+    EnclaveBuffer, EnclaveError, UserSpaceBuffer, HealthCheckResult, OcallReturn
 };
 
 pub const PUBLIC_KEY_SIZE: usize = 32;

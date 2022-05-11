@@ -11,4 +11,3 @@ pub extern "C" fn ocall_allocate(buffer: *const u8, length: usize) -> UserSpaceB
         ptr: heap_pointer as *mut c_void,
     }
 }
-

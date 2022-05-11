@@ -1,11 +1,13 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 use enclave_ffi_types::EnclaveError;
 use lazy_static::lazy_static;
+use std::vec::Vec;
 
 #[cfg(not(feature = "production"))]
 use std::backtrace::{self, PrintFormat};
 
 use std::sync::SgxMutex;
+
 /// SafetyBuffer is meant to occupy space on the heap, so when a memory
 /// allocation fails we will free this buffer to allow safe panic unwinding
 /// This is needed because while unwinding from panic some destructors try
@@ -53,7 +55,8 @@ impl SafetyBuffer {
                     if i > min_chunks {
                         break;
                     } else {
-                        return Err(EnclaveError::MemorySafetyAllocationError);
+                        // TODO:
+                        return Err(EnclaveError::Panic);
                     }
                 }
             };

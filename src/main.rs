@@ -386,7 +386,7 @@ mod tests {
         read_feed_file(&file_name, header_len, data_len, total_feeds, total_entries, fetch_size);
     }
 
-    // Testing out feed storage
+    // Testing out feed db
     // A lot of copied code here, obviously won't be like this.
 
     fn create_feed_file(

@@ -66,11 +66,12 @@ fn init_enclave(enclave_file: &str) -> SgxResult<SgxEnclave> {
 static ENCLAVE_FILE: &'static str = "enclave.signed.so";
 
 const ENCLAVE_LOCK_TIMEOUT: u64 = 6 * 5;
+const TCS_NUM: u8 = 8;
 
 lazy_static! {
     pub static ref ENCLAVE_DOORBELL: EnclaveDoorbell = EnclaveDoorbell::new(
         ENCLAVE_FILE,
-        num_cpus::get() as u8
+        std::cmp::min(TCS_NUM, num_cpus::get() as u8)
     );
 }
 

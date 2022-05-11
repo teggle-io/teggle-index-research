@@ -34,20 +34,6 @@ impl Default for EnclaveBuffer {
     }
 }
 
-/// This struct holds a pointer to memory in userspace, that contains the storage
-#[repr(C)]
-pub struct Ctx {
-    pub data: *mut c_void,
-}
-
-impl Ctx {
-    /// # Safety
-    /// Very unsafe. Much careful
-    pub unsafe fn unsafe_clone(&self) -> Self {
-        Self { data: self.data }
-    }
-}
-
 /// This type represents the possible error conditions that can be encountered in the enclave
 /// cbindgen:prefix-with-name
 #[repr(C)]
@@ -96,6 +82,8 @@ impl Default for HealthCheckResult {
 pub enum OcallReturn {
     /// Ocall returned successfully.
     Success,
+    /// Ocall returned successfully, but with no result.
+    None,
     /// Ocall failed for some reason.
     /// error parameters may be passed as out parameters.
     Failure,

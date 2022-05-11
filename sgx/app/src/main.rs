@@ -15,27 +15,28 @@
 // specific language governing permissions and limitations
 // under the License..
 
+extern crate enclave_ffi_types;
+extern crate lazy_static;
+extern crate log;
+extern crate parking_lot;
+extern crate rocksdb;
 extern crate sgx_types;
 extern crate sgx_urts;
-extern crate parking_lot;
-extern crate lazy_static;
-extern crate enclave_ffi_types;
-extern crate rocksdb;
-extern crate log;
-
-pub mod enclave;
-pub mod exports;
 
 use std::time::SystemTime;
+
 use log::trace;
-
-use rocksdb::{DB, DBCompactionStyle, Options};
 use sgx_types::*;
+use db::DB;
+
 use enclave::ENCLAVE_DOORBELL;
+use enclave_ffi_types::{EnclaveBuffer, OcallReturn};
+use traits::Db;
 
-use enclave_ffi_types::{Ctx, EnclaveBuffer, OcallReturn};
-
-static mut ROCKS_DB: Option<DB> = None;
+pub mod traits;
+pub mod db;
+pub mod enclave;
+pub mod exports;
 
 // TODO: Move all of this.
 
@@ -49,8 +50,7 @@ extern {
 
     pub fn perform_test(
         eid: sgx_enclave_id_t,
-        retval: *mut sgx_status_t,
-        context: Ctx
+        retval: *mut sgx_status_t
     ) -> sgx_status_t;
 }
 
@@ -88,46 +88,44 @@ fn allocate_enclave_buffer(buffer: &[u8]) -> SgxResult<EnclaveBuffer> {
 #[no_mangle]
 pub extern "C"
 fn ocall_db_get(
-    context: Ctx,
     value: *mut EnclaveBuffer,
+    key: *const u8,
+    key_len: usize,
+) -> OcallReturn {
+    let mut ret = OcallReturn::Success;
+
+    let key = unsafe { std::slice::from_raw_parts(key, key_len) };
+
+    // TODO: Remove expect
+    if let Some(res) = DB.get(key).expect("failed to get") {
+        let enclave_buffer = allocate_enclave_buffer(res.as_slice())
+            .expect("failed to allocate buffer"); // TODO: REMOVE EXPECT
+
+        unsafe { *value = enclave_buffer };
+    } else {
+        ret = OcallReturn::None
+    }
+
+    ret
+}
+
+#[no_mangle]
+pub extern "C"
+fn ocall_db_delete(
     key: *const u8,
     key_len: usize,
 ) -> OcallReturn {
     let key = unsafe { std::slice::from_raw_parts(key, key_len) };
 
-    unsafe {
-        if let Some(db) = ROCKS_DB.as_ref() {
-            // TODO: Remove expect
-            if let Some(res) = db.get(key).expect("failed to get") {
-                let enclave_buffer = allocate_enclave_buffer(res.as_slice())
-                    .expect("failed to allocate buffer"); // TODO: REMOVE EXPECT
-
-                unsafe { *value = enclave_buffer };
-            } else {
-                // TODO: None.
-                return OcallReturn::Failure;
-            }
-        }
-    }
+    // TODO: Remove expect
+    DB.delete(key).expect("failed to delete");
 
     OcallReturn::Success
 }
 
 #[no_mangle]
 pub extern "C"
-fn ocall_db_delete(
-    _context: Ctx,
-    _value: *mut EnclaveBuffer,
-    _key: *const u8,
-    _key_len: usize,
-) -> OcallReturn {
-    unimplemented!("ocall_db_delete is not implemented");
-}
-
-#[no_mangle]
-pub extern "C"
 fn ocall_db_put(
-    context: Ctx,
     key: *const u8,
     key_len: usize,
     value: *const u8,
@@ -136,49 +134,23 @@ fn ocall_db_put(
     let key = unsafe { std::slice::from_raw_parts(key, key_len) };
     let value = unsafe { std::slice::from_raw_parts(value, value_len) };
 
-    unsafe {
-        if let Some(db) = ROCKS_DB.as_ref() {
-            // TODO: Remove expect
-            db.put(key, value).expect("failed to put");
-        }
-    }
+    // TODO: Remove expect
+    DB.put(key, value).expect("failed to put");
 
     OcallReturn::Success
 }
 
 #[no_mangle]
 pub extern "C"
-fn ocall_db_flush(context: Ctx) -> OcallReturn {
-    unsafe {
-        if let Some(db) = ROCKS_DB.as_ref() {
-            // TODO: Remove expect
-            db.flush().expect("failed to flush");
-        }
-    }
+fn ocall_db_flush() -> OcallReturn
+{
+    // TODO: Remove expec
+    DB.flush().expect("failed to flush");
 
     OcallReturn::Success
 }
 
 fn main() {
-    let mut opts = Options::default();
-    opts.create_if_missing(true);
-    opts.set_compaction_style(DBCompactionStyle::Level);
-    opts.set_write_buffer_size(67_108_864); // 64mb
-    opts.set_max_write_buffer_number(3);
-    opts.set_target_file_size_base(67_108_864); // 64mb
-    opts.set_level_zero_file_num_compaction_trigger(8);
-    opts.set_level_zero_slowdown_writes_trigger(17);
-    opts.set_level_zero_stop_writes_trigger(24);
-    opts.set_num_levels(4);
-    opts.set_max_bytes_for_level_base(536_870_912); // 512mb
-    opts.set_max_bytes_for_level_multiplier(8.0);
-
-    unsafe {
-        // TODO: Remove expect.
-        ROCKS_DB = Some(DB::open(&opts, "./rocks.db")
-            .expect("failed to open rocks db"));
-    }
-
     let enclave_access_token = ENCLAVE_DOORBELL
         .get_access(false) // This can never be recursive
         .expect("failed to get access token (1)"); // TODO: remove expect
@@ -189,7 +161,7 @@ fn main() {
     let start = SystemTime::now();
 
     let result = unsafe {
-        say_something(enclave.geteid(),
+        perform_test(enclave.geteid(),
                       &mut retval)
     };
 
@@ -204,6 +176,5 @@ fn main() {
             return;
         }
     }
-    println!("[+] say_something success (taken: {}ms)", taken_ms);
-    enclave.destroy();
+    println!("[+] perform_test success (taken: {}ms)", taken_ms);
 }

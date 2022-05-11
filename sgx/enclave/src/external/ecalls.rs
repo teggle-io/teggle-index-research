@@ -7,18 +7,12 @@ use std::vec::Vec;
 use lazy_static::lazy_static;
 use log::*;
 
-use sgx_types::sgx_status_t;
-
 use enclave_ffi_types::{
-    Ctx, EnclaveBuffer, EnclaveError, HealthCheckResult
+    EnclaveBuffer, HealthCheckResult
 };
+use validate_const_ptr;
 
-use crate::utils::{oom_handler, recursion_depth, validate_const_ptr, validate_mut_ptr};
-
-use crate::external::results::{
-    result_handle_success_to_handleresult, result_init_success_to_initresult,
-    result_query_success_to_queryresult,
-};
+use crate::utils::{oom_handler};
 
 lazy_static! {
     static ref ECALL_ALLOCATE_STACK: SgxMutex<Vec<EnclaveBuffer>> = SgxMutex::new(Vec::new());

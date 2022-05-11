@@ -33,9 +33,7 @@ enclave {
             uintptr_t length
         );
 
-        public sgx_status_t perform_test(
-            Ctx context
-        );
+        public sgx_status_t perform_test();
     };
 
     untrusted {
@@ -45,28 +43,23 @@ enclave {
         );
 
         OcallReturn ocall_db_get(
-            Ctx context,
             [out] EnclaveBuffer* value,
             [in, count=key_len] const uint8_t* key,
             uintptr_t key_len
         ) allow (ecall_allocate);
 
         OcallReturn ocall_db_delete(
-            Ctx context,
             [in, count=key_len] const uint8_t* key,
             uintptr_t key_len
         );
 
         OcallReturn ocall_db_put(
-            Ctx context,
             [in, count=key_len] const uint8_t* key,
             uintptr_t key_len,
             [in, count=value_len] const uint8_t* value,
             uintptr_t value_len
         );
 
-        OcallReturn ocall_db_flush(
-            Ctx context
-        );
+        OcallReturn ocall_db_flush();
     };
 };
