@@ -210,7 +210,7 @@ pub extern "C" fn perform_test() -> sgx_status_t {
 
     for k in keys.iter() {
         //let _value = db_get(k).expect("failed to get db");
-        let _value = db_get_fixed(k, 1024).expect("failed to get db");
+        let _value = db_get_fixed(k, 32).expect("failed to get db");
 
         //println!("VALUE: {:?}", value.unwrap());
     }
