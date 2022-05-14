@@ -15,34 +15,37 @@
 // specific language governing permissions and limitations
 // under the License..
 
+extern crate sgx_types;
+extern crate sgx_urts;
 extern crate enclave_ffi_types;
 extern crate lazy_static;
 extern crate log;
 extern crate parking_lot;
 extern crate rocksdb;
-extern crate sgx_types;
-extern crate sgx_urts;
+extern crate mio;
 
 use std::time::SystemTime;
 
 use sgx_types::*;
+use api::server::run_api_server;
 
 use enclave::doorbell::ENCLAVE_DOORBELL;
 
-pub mod traits;
-pub mod db;
-pub mod api;
-pub mod enclave;
+pub(crate) mod traits;
+pub(crate) mod db;
+pub(crate) mod api;
+pub(crate) mod enclave;
 
 extern {
+    #[allow(dead_code)]
     pub fn ecall_perform_test(
         eid: sgx_enclave_id_t,
         retval: *mut sgx_status_t
     ) -> sgx_status_t;
 }
 
-
-fn main() {
+#[allow(dead_code)]
+fn run_perform_test() {
     let enclave_access_token = ENCLAVE_DOORBELL
         .get_access(false) // This can never be recursive
         .expect("failed to get access token (1)"); // TODO: remove expect
@@ -54,7 +57,7 @@ fn main() {
 
     let result = unsafe {
         ecall_perform_test(enclave.geteid(),
-                      &mut retval)
+                           &mut retval)
     };
 
     let end = SystemTime::now();
@@ -64,9 +67,14 @@ fn main() {
     match result {
         sgx_status_t::SGX_SUCCESS => {}
         _ => {
-            println!("[-] ECALL Enclave Failed {}!", result.as_str());
+            println!("[-] perform_test failed {}!", result.as_str());
             return;
         }
     }
     println!("[+] perform_test success (taken: {}ms)", taken_ms);
+}
+
+fn main() {
+    //run_perform_test();
+    run_api_server();
 }

@@ -7,9 +7,7 @@ use std::vec::Vec;
 use lazy_static::lazy_static;
 use log::*;
 
-use enclave_ffi_types::{
-    EnclaveBuffer, HealthCheckResult
-};
+use enclave_ffi_types::{EnclaveBuffer};
 use validate_const_ptr;
 
 use crate::utils::{oom_handler};
@@ -98,11 +96,4 @@ pub unsafe fn recover_buffer(ptr: EnclaveBuffer) -> Result<Option<Vec<u8>>, Buff
     }
     let boxed_vector = Box::from_raw(ptr.ptr as *mut Vec<u8>);
     Ok(Some(*boxed_vector))
-}
-
-/// # Safety
-/// Always use protection
-#[no_mangle]
-pub unsafe extern "C" fn ecall_health_check() -> HealthCheckResult {
-    HealthCheckResult::Success
 }

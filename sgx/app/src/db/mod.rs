@@ -1,12 +1,11 @@
 use lazy_static::lazy_static;
 use super::traits::{Db, Result};
 
-pub mod rocksdb;
+pub(crate) mod rocksdb;
 
 lazy_static! {
-    // TOOD: Make better.
     pub static ref GLOBAL_DB: DbInstance<rocksdb::RocksDb> = DbInstance::new(
-        rocksdb::RocksDb::default().expect("failed to init rocks db")
+        rocksdb::RocksDb::default().unwrap()
     );
 }
 

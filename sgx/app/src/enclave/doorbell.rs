@@ -127,6 +127,12 @@ impl EnclaveDoorbell {
     pub fn get_access(&'static self, recursive: bool) -> Option<EnclaveAccessToken> {
         self.wait_for(Duration::from_secs(ENCLAVE_LOCK_TIMEOUT), recursive)
     }
+
+    pub fn capacity(&'static self) -> u8 {
+        let count = self.count.lock();
+
+        *count
+    }
 }
 
 // NEVER add Clone or Copy

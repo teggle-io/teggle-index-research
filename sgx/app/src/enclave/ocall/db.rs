@@ -59,6 +59,7 @@ fn ocall_db_get_fixed(
             if res.is_some() {
                 let res = res.unwrap();
                 if res.len() > value_max_len {
+                    warn!("ocall_db_get_fixed fetch too big ({} vs {})", res.len(), value_max_len);
                     ret = OcallReturn::TooBig
                 } else {
                     unsafe {

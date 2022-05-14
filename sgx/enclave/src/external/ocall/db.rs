@@ -1,13 +1,7 @@
-use enclave_ffi_types::{EnclaveBuffer, OcallReturn, UserSpaceBuffer};
+use enclave_ffi_types::{EnclaveBuffer, OcallReturn};
 use sgx_types::*;
 
 extern "C" {
-    pub fn ocall_allocate(
-        retval: *mut UserSpaceBuffer,
-        buffer: *const u8,
-        length: usize,
-    ) -> sgx_status_t;
-
     pub fn ocall_db_get(
         retval: *mut OcallReturn,
         value: *mut EnclaveBuffer,
