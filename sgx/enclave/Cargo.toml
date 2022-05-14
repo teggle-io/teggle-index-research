@@ -19,7 +19,7 @@ blake2 = { git = "https://github.com/mesalock-linux/rustcrypto-hashes-sgx.git", 
 sha2 = { git = "https://github.com/mesalock-linux/rustcrypto-hashes-sgx.git", package = "sha2" }
 digest = { git = "https://github.com/mesalock-linux/rustcrypto-traits-sgx.git", package = "digest" }
 #protected_fs_rs = { git = "https://github.com/mesalock-linux/protected_fs_rs" }
-lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
+lazy_static = { version = "1.4.0", default-features = false, features = ["spin_no_std"] }
 
 [target.'cfg(not(target_env = "sgx"))'.dependencies]
 sgx_types = { rev = "v1.1.3", git = "https://github.com/apache/teaclave-sgx-sdk.git" }

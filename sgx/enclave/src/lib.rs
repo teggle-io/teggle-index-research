@@ -315,9 +315,12 @@ fn encrypt_with_chacha20poly1305(keys: Vec<[u8; 32]>) {
         key.seal_in_place_append_tag(nonce, Aad::from(&adata), &mut buffer)
             .expect("failed to seal");
 
-        let mut res = Vec::with_capacity(nonce_val.len() + buffer.len());
+        let mut res: Vec<u8> = Vec::with_capacity(nonce_val.len() + buffer.len());
         res.extend(&nonce_val[..]);
-        res.extend(buffer);
+        res.extend(&buffer);
+
+        // Get it back ...
+        // let (a, b) = res.split_at_mut(12);
 
         //buffer.splice(0..0, nonce_val.into_iter());
 

@@ -183,7 +183,7 @@ fn ocall_db_flush() -> OcallReturn
 }
 
 fn main() {
-    let enclave_access_token = ENCLAVE_DOORBELL
+    let mut enclave_access_token = ENCLAVE_DOORBELL
         .get_access(false) // This can never be recursive
         .expect("failed to get access token (1)"); // TODO: remove expect
     let enclave = enclave_access_token.expect("failed to get access token (2)");
