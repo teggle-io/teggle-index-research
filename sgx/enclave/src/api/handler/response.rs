@@ -1,9 +1,35 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use bytes::BytesMut;
 use http::{Response, StatusCode};
+use log::warn;
 use serde::Serialize;
+use api::handler::codec::GLOBAL_CODEC;
 
 pub(crate) type HttpResponse = Result<Response<Vec<u8>>, String>;
+
+pub(crate) fn encode_response(res: Response<Vec<u8>>) -> Result<Vec<u8>, String> {
+    let mut encoded = BytesMut::new();
+
+    GLOBAL_CODEC.encode(res, &mut encoded)
+        .map_err(|e| {
+            e.to_string()
+        })?;
+
+    Ok(encoded.to_vec())
+}
+
+pub(crate) fn encode_response_server_fault() -> Result<Vec<u8>, String> {
+    match error_response(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Server Fault") {
+        Ok(res) => encode_response(res),
+        Err(e) => {
+            warn!("api: failed to encode server fault response - {:?}", e);
+            Err(e.to_string())
+        }
+    }
+}
 
 pub(crate) fn error_response(status: StatusCode, msg: &str) -> HttpResponse {
     json_response(status, &ErrorMsg { status: u16::from(status), message: msg.to_string() })

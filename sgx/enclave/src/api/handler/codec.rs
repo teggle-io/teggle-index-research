@@ -1,8 +1,16 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+
 use bytes::BytesMut;
-use std::{fmt, io};
 use http::{header::HeaderValue, Request, Response};
+use lazy_static::lazy_static;
+use std::{fmt, io};
+
+lazy_static! {
+    pub(crate) static ref GLOBAL_CODEC: HttpCodec = {
+        HttpCodec::new("index.teggle.io/v1beta1")
+    };
+}
 
 // Borrowed from: https://github.com/tokio-rs/tokio/blob/master/examples/tinyhttp.rs
 
