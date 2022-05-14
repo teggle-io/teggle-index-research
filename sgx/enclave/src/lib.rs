@@ -40,6 +40,8 @@ extern crate sha2;
 extern crate uuid;
 extern crate webpki;
 extern crate rustls;
+extern crate mio;
+extern crate net2;
 extern crate http;
 extern crate httparse;
 extern crate bytes;

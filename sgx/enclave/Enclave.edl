@@ -21,6 +21,7 @@ enclave {
     from "sgx_backtrace.edl" import *;
     from "sgx_fs.edl" import *;
     from "sgx_net.edl" import *;
+    from "sgx_pipe.edl" import *;
     from "sgx_time.edl" import *;
     from "sgx_tstdc.edl" import *;
     from "sgx_tprotected_fs.edl" import *;
@@ -38,11 +39,7 @@ enclave {
 
         public sgx_status_t ecall_perform_test();
 
-        public size_t ecall_api_server_new(int fd);
-        public int ecall_api_server_handle(size_t session_id);
-        public int ecall_api_server_wants_read(size_t session_id);
-        public int ecall_api_server_wants_write(size_t session_id);
-        public void ecall_api_server_close(size_t session_id);
+        public void ecall_api_service_start([in, string]char* addr);
     };
 
     untrusted {

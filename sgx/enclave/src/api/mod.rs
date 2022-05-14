@@ -1,2 +1,2 @@
-pub(crate) mod session;
+pub(crate) mod service;
 pub(crate) mod handler;

@@ -22,13 +22,11 @@ extern crate lazy_static;
 extern crate log;
 extern crate parking_lot;
 extern crate rocksdb;
-extern crate mio;
-extern crate net2;
 
 use std::time::SystemTime;
 
 use sgx_types::*;
-use api::server::run_api_server;
+use api::server::{start_api_service};
 
 use enclave::doorbell::ENCLAVE_DOORBELL;
 
@@ -77,5 +75,5 @@ fn run_perform_test() {
 
 fn main() {
     //run_perform_test();
-    run_api_server();
+    start_api_service("0.0.0.0:8443".to_string())
 }
