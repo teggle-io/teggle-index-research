@@ -23,6 +23,7 @@ extern crate log;
 extern crate parking_lot;
 extern crate rocksdb;
 extern crate mio;
+extern crate net2;
 
 use std::time::SystemTime;
 

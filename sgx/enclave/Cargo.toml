@@ -14,6 +14,7 @@ default = []
 enclave-ffi-types = { path = "../ffi-types" }
 uuid = { git = "https://github.com/mesalock-linux/uuid-sgx.git", features = ["v5"] }
 log = { git = "https://github.com/mesalock-linux/log-sgx.git" }
+http = { git = "https://github.com/mesalock-linux/http-sgx.git" }
 ring = { git = "https://github.com/mesalock-linux/ring-sgx.git", tag = "v0.16.5" }
 blake2 = { git = "https://github.com/mesalock-linux/rustcrypto-hashes-sgx.git", package = "blake2" }
 sha2 = { git = "https://github.com/mesalock-linux/rustcrypto-hashes-sgx.git", package = "sha2" }
@@ -22,6 +23,11 @@ rustls = { git = "https://github.com/mesalock-linux/rustls", branch = "mesalock_
 webpki = { git = "https://github.com/mesalock-linux/webpki", branch = "mesalock_sgx" }
 #protected_fs_rs = { git = "https://github.com/mesalock-linux/protected_fs_rs" }
 lazy_static = { version = "1.4.0", default-features = false, features = ["spin_no_std"] }
+serde = { git = "https://github.com/mesalock-linux/serde-sgx.git", package = "serde" }
+serde_derive = { git = "https://github.com/mesalock-linux/serde-sgx.git", package = "serde_derive" }
+serde_json = { git = "https://github.com/mesalock-linux/serde-json-sgx.git" }
+bytes = { git = "https://github.com/mesalock-linux/bytes-sgx.git" }
+httparse = { version = "1.7.1", default-features = false }
 
 [target.'cfg(not(target_env = "sgx"))'.dependencies]
 sgx_types = { rev = "v1.1.3", git = "https://github.com/apache/teaclave-sgx-sdk.git" }

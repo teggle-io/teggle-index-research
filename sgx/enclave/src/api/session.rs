@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, AtomicPtr, Ordering};
 
 use rustls::{Session, NoClientAuth};
+use api::handler::process_raw_request;
 
 static GLOBAL_CONTEXT_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -106,41 +107,40 @@ impl ApiSession {
     }
 
     pub(crate) fn handle(&mut self) -> HandleResult {
-        // 1. Initialize the TLS read
         let r = self.read_tls();
         if r == -1 {
             return HandleResult::EOF;
         }
 
-        // 2. Read request.
-        let mut plaintext = Vec::new();
-        let r = self.read(&mut plaintext);
+        let mut request_body = Vec::new();
+        let r = self.read(&mut request_body);
         if r == -1 {
             return HandleResult::EOF;
         }
 
-        //println!("REQUEST({}):: {}", plaintext.len(),
-        //         String::from_utf8(plaintext.clone()).expect("failed to decode"));
-
-        if plaintext.len() <= 0 {
-            // 3. Send empty response (no request data).
-            self.write_tls();
-        } else {
-            // 3. Parse response.
-
-            let response = b"HTTP/1.0 200 OK\r\nConnection: close\r\n\r\nHello world from rustls tlsserver\r\n";
-
-            //println!("RESPONSE({}):: {}", response.len(),
-            //         String::from_utf8(response.to_vec()).expect("failed to decode"));
-
-            let r = self.write(response);
-            if r > 0 {
-                // Finalize the TLS write
-                self.write_tls();
-                self.tls_session.send_close_notify();
-
-                return HandleResult::Close
+        let mut finalize = false;
+        if request_body.len() > 0 {
+            match process_raw_request(request_body) {
+                Ok(res) => {
+                    let r = self.write(&res[..]);
+                    if r > 0 {
+                        finalize = true
+                    }
+                }
+                Err(err) => {
+                    warn!("ApiSession: failed to handle request: {:?}", err);
+                    return HandleResult::Error;
+                }
             }
+        }
+
+        // Flush buffer (anything written will be sent now).
+        self.write_tls();
+
+        if finalize {
+            self.tls_session.send_close_notify();
+
+            return HandleResult::Close
         }
 
         HandleResult::Continue

@@ -23,22 +23,30 @@
 #![cfg_attr(not(target_env = "sgx"), no_std)]
 #![cfg_attr(target_env = "sgx", feature(rustc_private))]
 
-extern crate alloc;
-extern crate blake2;
-extern crate digest;
-extern crate enclave_ffi_types;
-extern crate lazy_static;
-extern crate log;
-extern crate ring;
-extern crate sgx_trts;
 #[cfg(not(target_env = "sgx"))]
 #[macro_use]
 extern crate sgx_tstd as std;
 extern crate sgx_types;
+extern crate sgx_trts;
+extern crate enclave_ffi_types;
+
+extern crate alloc;
+extern crate blake2;
+extern crate digest;
+extern crate lazy_static;
+extern crate log;
+extern crate ring;
 extern crate sha2;
 extern crate uuid;
 extern crate webpki;
 extern crate rustls;
+extern crate http;
+extern crate httparse;
+extern crate bytes;
+extern crate serde;
+#[macro_use]
+extern crate serde_derive;
+extern crate serde_json;
 
 use blake2::VarBlake2b;
 use blake2::digest::{Input, VariableOutput};

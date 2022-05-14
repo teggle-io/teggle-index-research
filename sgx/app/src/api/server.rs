@@ -2,12 +2,14 @@ use std::{net, thread};
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::net::Shutdown;
-use std::os::unix::io::{AsRawFd, FromRawFd};
+use std::os::unix::io::{AsRawFd};
 
 use log::warn;
 use mio::{Events, Interest, Poll, Token};
 use mio::event::Event;
 use mio::net::{TcpListener, TcpStream};
+use net2::TcpBuilder;
+use net2::unix::UnixTcpBuilderExt;
 use sgx_types::*;
 
 use enclave::ecall::api::{ecall_api_server_close, ecall_api_server_handle, ecall_api_server_new,
@@ -239,14 +241,19 @@ impl Connection {
 
 pub(crate) fn run_api_server() {
     let addr: net::SocketAddr = "0.0.0.0:8443".parse().unwrap();
-    let listener = TcpListener::bind(addr).unwrap();
 
     let mut children = vec![];
     let thread_count = std::cmp::min(std::cmp::min(THREAD_NUM,
                                                    ENCLAVE_DOORBELL.capacity()),
                                      num_cpus::get() as u8);
+
     for _ in 0..thread_count {
-        let mut listener = unsafe { TcpListener::from_raw_fd(listener.as_raw_fd()) };
+        let mut listener = TcpListener::from_std(
+            TcpBuilder::new_v4().unwrap()
+                .reuse_address(true).unwrap()
+                .reuse_port(true).unwrap()
+                .bind(&addr).unwrap()
+                .listen(1024).unwrap());
 
         children.push(thread::spawn(move || {
             let enclave_access_token = ENCLAVE_DOORBELL
@@ -266,13 +273,15 @@ pub(crate) fn run_api_server() {
             // TODO: Remove
             println!("[+] ApiServer started");
 
-            loop {
+            'outer: loop {
                 poll.poll(&mut events, None).unwrap();
 
                 for event in events.iter() {
                     match event.token() {
                         LISTENER => {
-                            tlsserv.accept(&mut poll);
+                            if !tlsserv.accept(&mut poll) {
+                                break 'outer;
+                            }
                         }
                         _ => {
                             tlsserv.conn_event(&mut poll, &event)
