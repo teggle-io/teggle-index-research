@@ -33,7 +33,7 @@ enclave {
             uintptr_t length
         );
 
-        public sgx_status_t perform_test();
+        public sgx_status_t ecall_perform_test();
     };
 
     untrusted {

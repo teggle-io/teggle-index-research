@@ -177,7 +177,7 @@ fn db_flush() -> Result<(), String> {
 }
 
 #[no_mangle]
-pub extern "C" fn perform_test() -> sgx_status_t {
+pub extern "C" fn ecall_perform_test() -> sgx_status_t {
     /*
     let mut f = std::untrusted::fs::OpenOptions::new()
         .create(true)

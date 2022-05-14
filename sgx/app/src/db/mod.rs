@@ -5,7 +5,7 @@ pub mod rocksdb;
 
 lazy_static! {
     // TOOD: Make better.
-    pub static ref DB: DbInstance<rocksdb::RocksDb> = DbInstance::new(
+    pub static ref GLOBAL_DB: DbInstance<rocksdb::RocksDb> = DbInstance::new(
         rocksdb::RocksDb::default().expect("failed to init rocks db")
     );
 }

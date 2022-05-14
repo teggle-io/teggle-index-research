@@ -23,167 +23,27 @@ extern crate rocksdb;
 extern crate sgx_types;
 extern crate sgx_urts;
 
-use std::ptr;
 use std::time::SystemTime;
 
-use log::trace;
 use sgx_types::*;
-use db::DB;
 
-use enclave::ENCLAVE_DOORBELL;
-use enclave_ffi_types::{EnclaveBuffer, OcallReturn};
-use traits::Db;
+use enclave::doorbell::ENCLAVE_DOORBELL;
 
 pub mod traits;
 pub mod db;
+pub mod api;
 pub mod enclave;
-pub mod exports;
-
-// TODO: Move all of this.
 
 extern {
-    pub fn ecall_allocate(
-        eid: sgx_enclave_id_t,
-        retval: *mut EnclaveBuffer,
-        buffer: *const u8,
-        length: usize,
-    ) -> sgx_status_t;
-
-    pub fn perform_test(
+    pub fn ecall_perform_test(
         eid: sgx_enclave_id_t,
         retval: *mut sgx_status_t
     ) -> sgx_status_t;
 }
 
-/// This is a safe wrapper for allocating buffers inside the enclave.
-fn allocate_enclave_buffer(buffer: &[u8]) -> SgxResult<EnclaveBuffer> {
-    let ptr = buffer.as_ptr();
-    let len = buffer.len();
-    let mut enclave_buffer = EnclaveBuffer::default();
-
-    // Bind the token to a local variable to ensure its
-    // destructor runs in the end of the function
-    let enclave_access_token = ENCLAVE_DOORBELL
-        // This is always called from an ocall contxt
-        .get_access(true)
-        .ok_or(sgx_status_t::SGX_ERROR_BUSY)?;
-
-    let enclave_id = enclave_access_token
-        .expect("If we got here, surely the enclave has been loaded")
-        .geteid();
-
-    trace!(
-        target: module_path!(),
-        "allocate_enclave_buffer() called with len: {:?} enclave_id: {:?}",
-        len,
-        enclave_id,
-    );
-
-    match unsafe { ecall_allocate(enclave_id, &mut enclave_buffer, ptr, len) } {
-        sgx_status_t::SGX_SUCCESS => Ok(enclave_buffer),
-        failure_status => Err(failure_status),
-    }
-}
-
-
-#[no_mangle]
-pub extern "C"
-fn ocall_db_get(
-    value: *mut EnclaveBuffer,
-    key: *const u8,
-    key_len: usize,
-) -> OcallReturn {
-    let mut ret = OcallReturn::Success;
-
-    let key = unsafe { std::slice::from_raw_parts(key, key_len) };
-
-    // TODO: Remove expect
-    if let Some(res) = DB.get(key).expect("failed to get") {
-        let enclave_buffer = allocate_enclave_buffer(res.as_slice())
-            .expect("failed to allocate buffer"); // TODO: REMOVE EXPECT
-
-        unsafe { *value = enclave_buffer };
-    } else {
-        ret = OcallReturn::None
-    }
-
-    ret
-}
-
-#[no_mangle]
-pub extern "C"
-fn ocall_db_get_fixed(
-    key: *const u8,
-    key_len: usize,
-    value: *mut u8,
-    value_max_len: usize,
-    value_len: *mut usize
-) -> OcallReturn {
-    let mut ret = OcallReturn::Success;
-
-    let key = unsafe { std::slice::from_raw_parts(key, key_len) };
-
-    // TODO: Remove expect
-    if let Some(res) = DB.get(key).expect("failed to get") {
-        if res.len() > value_max_len {
-            ret = OcallReturn::TooBig
-        } else {
-            unsafe {
-                ptr::copy_nonoverlapping(res.as_ptr(), value, res.len());
-
-                *value_len = res.len();
-            }
-        }
-    } else {
-        ret = OcallReturn::None
-    }
-
-    ret
-}
-
-#[no_mangle]
-pub extern "C"
-fn ocall_db_delete(
-    key: *const u8,
-    key_len: usize,
-) -> OcallReturn {
-    let key = unsafe { std::slice::from_raw_parts(key, key_len) };
-
-    // TODO: Remove expect
-    DB.delete(key).expect("failed to delete");
-
-    OcallReturn::Success
-}
-
-#[no_mangle]
-pub extern "C"
-fn ocall_db_put(
-    key: *const u8,
-    key_len: usize,
-    value: *const u8,
-    value_len: usize,
-) -> OcallReturn {
-    let key = unsafe { std::slice::from_raw_parts(key, key_len) };
-    let value = unsafe { std::slice::from_raw_parts(value, value_len) };
-
-    // TODO: Remove expect
-    DB.put(key, value).expect("failed to put");
-
-    OcallReturn::Success
-}
-
-#[no_mangle]
-pub extern "C"
-fn ocall_db_flush() -> OcallReturn
-{
-    // TODO: Remove expec
-    DB.flush().expect("failed to flush");
-
-    OcallReturn::Success
-}
 
 fn main() {
-    let mut enclave_access_token = ENCLAVE_DOORBELL
+    let enclave_access_token = ENCLAVE_DOORBELL
         .get_access(false) // This can never be recursive
         .expect("failed to get access token (1)"); // TODO: remove expect
     let enclave = enclave_access_token.expect("failed to get access token (2)");
@@ -193,7 +53,7 @@ fn main() {
     let start = SystemTime::now();
 
     let result = unsafe {
-        perform_test(enclave.geteid(),
+        ecall_perform_test(enclave.geteid(),
                       &mut retval)
     };
 
