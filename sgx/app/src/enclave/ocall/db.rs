@@ -1,7 +1,10 @@
-use enclave_ffi_types::{EnclaveBuffer, OcallReturn};
 use std::ptr;
+
+use log::warn;
+
 use db::GLOBAL_DB;
 use enclave::allocate::allocate_enclave_buffer;
+use enclave_ffi_types::{EnclaveBuffer, OcallReturn};
 use traits::Db;
 
 #[no_mangle]
@@ -11,18 +14,28 @@ fn ocall_db_get(
     key: *const u8,
     key_len: usize,
 ) -> OcallReturn {
-    let mut ret = OcallReturn::Success;
+    let mut ret = OcallReturn::None;
 
     let key = unsafe { std::slice::from_raw_parts(key, key_len) };
 
-    // TODO: Remove expect
-    if let Some(res) = GLOBAL_DB.get(key).expect("failed to get") {
-        let enclave_buffer = allocate_enclave_buffer(res.as_slice())
-            .expect("failed to allocate buffer"); // TODO: REMOVE EXPECT
-
-        unsafe { *value = enclave_buffer };
-    } else {
-        ret = OcallReturn::None
+    match GLOBAL_DB.get(key) {
+        Ok(res) => {
+            if res.is_some() {
+                match allocate_enclave_buffer(res.unwrap().as_slice()) {
+                    Ok(enclave_buffer) => {
+                        unsafe { *value = enclave_buffer };
+                    }
+                    Err(e) => {
+                        warn!("ocall_db_get failed to allocate enclave buffer {:?}", e);
+                        ret = OcallReturn::Failure
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            warn!("ocall_db_get failed {:?}", e);
+            ret = OcallReturn::Failure
+        }
     }
 
     ret
@@ -41,19 +54,25 @@ fn ocall_db_get_fixed(
 
     let key = unsafe { std::slice::from_raw_parts(key, key_len) };
 
-    // TODO: Remove expect
-    if let Some(res) = GLOBAL_DB.get(key).expect("failed to get") {
-        if res.len() > value_max_len {
-            ret = OcallReturn::TooBig
-        } else {
-            unsafe {
-                ptr::copy_nonoverlapping(res.as_ptr(), value, res.len());
+    match GLOBAL_DB.get(key) {
+        Ok(res) => {
+            if res.is_some() {
+                let res = res.unwrap();
+                if res.len() > value_max_len {
+                    ret = OcallReturn::TooBig
+                } else {
+                    unsafe {
+                        ptr::copy_nonoverlapping(res.as_ptr(), value, res.len());
 
-                *value_len = res.len();
+                        *value_len = res.len();
+                    }
+                }
             }
         }
-    } else {
-        ret = OcallReturn::None
+        Err(e) => {
+            warn!("ocall_db_get_fixed failed {:?}", e);
+            ret = OcallReturn::Failure
+        }
     }
 
     ret
@@ -65,12 +84,19 @@ fn ocall_db_delete(
     key: *const u8,
     key_len: usize,
 ) -> OcallReturn {
+    let mut ret = OcallReturn::Success;
+
     let key = unsafe { std::slice::from_raw_parts(key, key_len) };
 
-    // TODO: Remove expect
-    GLOBAL_DB.delete(key).expect("failed to delete");
+    match GLOBAL_DB.delete(key) {
+        Err(e) => {
+            warn!("ocall_db_delete failed {:?}", e);
+            ret = OcallReturn::Failure
+        }
+        _ => {}
+    }
 
-    OcallReturn::Success
+    ret
 }
 
 #[no_mangle]
@@ -81,21 +107,35 @@ fn ocall_db_put(
     value: *const u8,
     value_len: usize,
 ) -> OcallReturn {
+    let mut ret = OcallReturn::Success;
+
     let key = unsafe { std::slice::from_raw_parts(key, key_len) };
     let value = unsafe { std::slice::from_raw_parts(value, value_len) };
 
-    // TODO: Remove expect
-    GLOBAL_DB.put(key, value).expect("failed to put");
+    match GLOBAL_DB.put(key, value) {
+        Err(e) => {
+            warn!("ocall_db_put failed {:?}", e);
+            ret = OcallReturn::Failure
+        }
+        _ => {}
+    }
 
-    OcallReturn::Success
+    ret
 }
 
 #[no_mangle]
 pub extern "C"
 fn ocall_db_flush() -> OcallReturn
 {
-    // TODO: Remove expec
-    GLOBAL_DB.flush().expect("failed to flush");
+    let mut ret = OcallReturn::Success;
 
-    OcallReturn::Success
+    match GLOBAL_DB.flush() {
+        Err(e) => {
+            warn!("ocall_db_flush failed {:?}", e);
+            ret = OcallReturn::Failure
+        }
+        _ => {}
+    }
+
+    ret
 }

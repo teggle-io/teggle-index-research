@@ -1,13 +1,11 @@
-use std::ffi::c_void;
-use enclave_ffi_types::UserSpaceBuffer;
+use sgx_types::*;
+use enclave_ffi_types::{EnclaveBuffer};
 
-#[no_mangle]
-pub extern "C" fn ocall_allocate(buffer: *const u8, length: usize) -> UserSpaceBuffer {
-    let slice = unsafe { std::slice::from_raw_parts(buffer, length) };
-    let vector_copy = slice.to_vec();
-    let boxed_vector = Box::new(vector_copy);
-    let heap_pointer = Box::into_raw(boxed_vector);
-    UserSpaceBuffer {
-        ptr: heap_pointer as *mut c_void,
-    }
+extern {
+    pub fn ecall_allocate(
+        eid: sgx_enclave_id_t,
+        retval: *mut EnclaveBuffer,
+        buffer: *const u8,
+        length: usize,
+    ) -> sgx_status_t;
 }

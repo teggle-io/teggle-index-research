@@ -1,7 +1,7 @@
 use log::trace;
 use sgx_types::{sgx_status_t, SgxResult};
 
-use enclave::ocall::allocate::ecall_allocate;
+use enclave::ecall::allocate::ecall_allocate;
 use ENCLAVE_DOORBELL;
 use enclave_ffi_types::EnclaveBuffer;
 
