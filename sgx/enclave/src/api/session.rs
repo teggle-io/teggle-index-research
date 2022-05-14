@@ -51,7 +51,7 @@ impl ApiSession {
         // is broken.
         let rc = self.tls_session.read_tls(&mut *self.socket);
         if rc.is_err() {
-            println!("TLS read error: {:?}", rc);
+            warn!("ApiSession: TLS read error: {:?}", rc);
             return -1;
         }
 
@@ -66,7 +66,7 @@ impl ApiSession {
         // TLS protocol problems and are fatal.
         let processed = self.tls_session.process_new_packets();
         if processed.is_err() {
-            println!("TLS error: {:?}", processed.unwrap_err());
+            warn!("ApiSession: TLS error: {:?}", processed.unwrap_err());
             return -1;
         }
         return 0;
@@ -83,7 +83,7 @@ impl ApiSession {
         // session closure.
         if rc.is_err() {
             let err = rc.unwrap_err();
-            println!("Plaintext read error: {:?}", err);
+            warn!("ApiSession: Plaintext read error: {:?}", err);
             return -1;
         }
         plaintext.len() as c_int
@@ -208,7 +208,7 @@ impl SessionManager {
                 Some(curr_id)
             },
             Err(x) => {
-                warn!("Locking global context SgxRwLock failed! {:?}", x);
+                warn!("SessionManager: Locking global context SgxRwLock failed! {:?}", x);
                 None
             },
         }
@@ -222,13 +222,13 @@ impl SessionManager {
                         Some(s.load(Ordering::SeqCst))
                     },
                     None => {
-                        warn!("Global contexts cannot find session id = {}", sess_id);
+                        warn!("SessionManager: Global contexts cannot find session id = {}", sess_id);
                         None
                     }
                 }
             },
             Err(x) => {
-                warn!("Locking global context SgxRwLock failed on get_session! {:?}", x);
+                warn!("SessionManager: Locking global context SgxRwLock failed on get_session! {:?}", x);
                 None
             },
         }
