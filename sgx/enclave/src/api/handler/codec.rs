@@ -29,11 +29,12 @@ impl HttpCodec {
         write!(
             BytesWrite(dst),
             "\
-             HTTP/1.1 {}\r\n\
+             {:?} {}\r\n\
              Server: {}\r\n\
              Content-Length: {}\r\n\
              Date: {}\r\n\
              ",
+            item.version(),
             item.status(),
             self.server,
             item.body().len(),
@@ -92,19 +93,25 @@ impl HttpCodec {
                 amt,
             )
         };
-        if version != 1 {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "only HTTP/1.1 accepted",
-            ));
-        }
+
         let data = src.split_to(amt).freeze();
         let mut ret = Request::builder();
         ret = ret.method(&data[method.0..method.1]);
         let s = data.slice(path.0..path.1);
         let s = unsafe { String::from_utf8_unchecked(Vec::from(s.as_ref())) };
         ret = ret.uri(s);
-        ret = ret.version(http::Version::HTTP_11);
+
+        match version {
+            0 => { ret = ret.version(http::Version::HTTP_10); },
+            1 => { ret = ret.version(http::Version::HTTP_11); },
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "only HTTP/1.0 or 1.1 accepted",
+                ));
+            }
+        }
+
         for header in headers.iter() {
             let (k, v) = match *header {
                 Some((ref k, ref v)) => (k, v),
@@ -118,6 +125,7 @@ impl HttpCodec {
         let req = ret
             .body(())
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
         Ok(Some(req))
     }
 }

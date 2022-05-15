@@ -9,11 +9,13 @@ crate-type = ["staticlib"]
 
 [features]
 default = []
+production = []
 
 [dependencies]
 enclave-ffi-types = { path = "../ffi-types" }
 uuid = { git = "https://github.com/mesalock-linux/uuid-sgx.git", features = ["v5"] }
 log = { git = "https://github.com/mesalock-linux/log-sgx.git" }
+pretty_env_logger = { path = "../../../pretty-env-logger-sgx" }
 http = { git = "https://github.com/mesalock-linux/http-sgx.git" }
 ring = { git = "https://github.com/mesalock-linux/ring-sgx.git", tag = "v0.16.5" }
 blake2 = { git = "https://github.com/mesalock-linux/rustcrypto-hashes-sgx.git", package = "blake2" }

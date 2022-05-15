@@ -1,6 +1,7 @@
+use alloc::string::String;
 use alloc::vec::Vec;
 
-use log::{warn};
+use log::{trace, warn};
 use mio::event::Event;
 use mio::net::{TcpStream};
 use rustls::Session;
@@ -44,12 +45,25 @@ impl Connection {
         }
 
         if request_body.len() > 0 {
+            trace!("req body: {:?}", String::from_utf8(request_body.clone()));
+
             match process_raw_request(request_body) {
                 Ok(res) => {
-                    self.write(&res[..]);
+                    let body = res.body();
+
+                    if body.len() > 0 {
+                        trace!("res body: {:?}", String::from_utf8(body.clone()));
+                    }
+
+                    self.write(&body[..]);
+
+                    if res.close() {
+                        self.session.send_close_notify();
+                    }
                 }
                 Err(err) => {
-                    warn!("ApiSession: failed to handle request: {:?}", err);
+                    warn!("failed to handle request: {:?}", err);
+                    self.closing = true;
                     return;
                 }
             }
@@ -58,20 +72,24 @@ impl Connection {
 
     pub(crate) fn ready(&mut self, poll: &mut mio::Poll, ev: &Event) {
         if ev.readiness().is_readable() {
+            trace!("ready: READ");
             self.read_tls();
             self.read_and_process_request();
         }
 
         if ev.readiness().is_writable() {
+            trace!("ready: WRITE");
             self.write_tls_and_handle_error();
         }
 
         if self.closing {
-            self.session.send_close_notify();
+            trace!("ready: CLOSE");
+            //self.session.send_close_notify();
             let _ = self.socket.shutdown(Shutdown::Both);
             self.closed = true;
             self.deregister(poll);
         } else {
+            trace!("ready: CONTINUE");
             self.reregister(poll);
         }
     }
@@ -111,20 +129,20 @@ impl Connection {
     }
 
     fn read(&mut self, plaintext: &mut Vec<u8>) -> isize {
-        // Having read some TLS data, and processed any new messages,
-        // we might have new plaintext as a result.
-        //
-        // Read it and then write it to stdout.
-        let rc = self.session.read_to_end(plaintext);
+        match self.session.read_to_end(plaintext) {
+            Err(err) => {
+                if let io::ErrorKind::ConnectionAborted = err.kind() {
+                    self.closing = true;
+                    return -1;
+                }
 
-        // If that fails, the peer might have started a clean TLS-level
-        // session closure.
-        if rc.is_err() {
-            let err = rc.unwrap_err();
-            warn!("API Connection: Plaintext read error: {:?}", err);
-            return -1;
+                warn!("plaintext read error: {:?}", err);
+                return -1;
+            }
+            Ok(_) => {
+                plaintext.len() as isize
+            }
         }
-        plaintext.len() as isize
     }
 
     fn read_tls(&mut self) {
@@ -134,8 +152,12 @@ impl Connection {
                 if let io::ErrorKind::WouldBlock = err.kind() {
                     return;
                 }
+                if let io::ErrorKind::ConnectionAborted = err.kind() {
+                    self.closing = true;
+                    return;
+                }
 
-                warn!("API Connection: TLS read error: {:?}", err);
+                warn!("TLS read error: {:?}", err);
                 self.closing = true;
                 return;
             }
@@ -149,7 +171,7 @@ impl Connection {
 
         // Process newly-received TLS messages.
         if let Err(err) = self.session.process_new_packets() {
-            warn!("API Connection: TLS error: {:?}", err);
+            warn!("TLS error: {:?}", err);
 
             // last gasp write to send any alerts
             self.write_tls_and_handle_error();
@@ -162,7 +184,12 @@ impl Connection {
     fn write(&mut self, plaintext: &[u8]) -> isize {
         match self.session.write(plaintext) {
             Err(err) => {
-                warn!("API Connection: TLS plain write error: {:?}", err);
+                if let io::ErrorKind::ConnectionAborted = err.kind() {
+                    self.closing = true;
+                    return -1;
+                }
+
+                warn!("TLS plain write error: {:?}", err);
                 self.closing = true;
 
                 -1
@@ -179,7 +206,7 @@ impl Connection {
     fn write_tls_and_handle_error(&mut self) {
         let rc = self.write_tls();
         if rc.is_err() {
-            warn!("API Connection: TLS write failed {:?}", rc);
+            warn!("TLS write failed {:?}", rc);
             self.closing = true;
         }
     }

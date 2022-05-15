@@ -19,7 +19,7 @@ pub(crate) fn start_api_service(addr: String) {
         let addr = addr.clone();
 
         children.push(thread::spawn(move || {
-            println!("[{:?}] Starting API service ({})", thread::current().id(), &addr);
+            info!("🚀 Starting API service ({}) [{:?}]", &addr, thread::current().id());
 
             let enclave_access_token = ENCLAVE_DOORBELL
                 .get_access(false) // This can never be recursive

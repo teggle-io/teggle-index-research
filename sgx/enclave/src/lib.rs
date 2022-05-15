@@ -30,11 +30,13 @@ extern crate sgx_types;
 extern crate sgx_trts;
 extern crate enclave_ffi_types;
 
+extern crate pretty_env_logger;
+#[macro_use] extern crate log;
+
 extern crate alloc;
 extern crate blake2;
 extern crate digest;
 extern crate lazy_static;
-extern crate log;
 extern crate ring;
 extern crate sha2;
 extern crate uuid;

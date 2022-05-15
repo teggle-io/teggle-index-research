@@ -19,9 +19,11 @@ extern crate sgx_types;
 extern crate sgx_urts;
 extern crate enclave_ffi_types;
 extern crate lazy_static;
-extern crate log;
 extern crate parking_lot;
 extern crate rocksdb;
+
+extern crate pretty_env_logger;
+#[macro_use] extern crate log;
 
 use std::time::SystemTime;
 
@@ -66,14 +68,15 @@ fn run_perform_test() {
     match result {
         sgx_status_t::SGX_SUCCESS => {}
         _ => {
-            println!("[-] perform_test failed {}!", result.as_str());
+            error!("[-] perform_test failed {}!", result.as_str());
             return;
         }
     }
-    println!("[+] perform_test success (taken: {}ms)", taken_ms);
+    error!("[+] perform_test success (taken: {}ms)", taken_ms);
 }
 
 fn main() {
-    //run_perform_test();
+    pretty_env_logger::init();
+
     start_api_service("0.0.0.0:8443".to_string())
 }

@@ -22,6 +22,7 @@ enclave {
     from "sgx_fs.edl" import *;
     from "sgx_net.edl" import *;
     from "sgx_pipe.edl" import *;
+    from "sgx_env.edl" import *;
     from "sgx_time.edl" import *;
     from "sgx_tstdc.edl" import *;
     from "sgx_tprotected_fs.edl" import *;
@@ -31,6 +32,8 @@ enclave {
 
     trusted {
         /* define ECALLs here. */
+
+        public void ecall_init();
 
         EnclaveBuffer ecall_allocate(
             [in, count=length] const uint8_t* buffer,

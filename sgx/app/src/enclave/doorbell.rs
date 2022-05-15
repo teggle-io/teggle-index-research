@@ -10,6 +10,7 @@ use sgx_urts::SgxEnclave;
 use lazy_static::lazy_static;
 use log::*;
 use parking_lot::{Condvar, Mutex};
+use enclave::ecall::init::ecall_init;
 
 #[cfg(feature = "production")]
 const ENCLAVE_DEBUG: i32 = 0;
@@ -54,13 +55,17 @@ fn init_enclave(enclave_file: &str) -> SgxResult<SgxEnclave> {
         sgx_status_t::SGX_ERROR_INVALID_ENCLAVE
     })?;
 
-    SgxEnclave::create(
+    let res = SgxEnclave::create(
         enclave_file_path,
         debug,
         &mut launch_token,
         &mut launch_token_updated,
         &mut misc_attr,
-    )
+    );
+
+    unsafe { ecall_init(res.as_ref().unwrap().geteid()) };
+
+    res
 }
 
 static ENCLAVE_FILE: &'static str = "enclave.signed.so";
@@ -92,7 +97,7 @@ pub struct EnclaveDoorbell {
 
 impl EnclaveDoorbell {
     fn new(enclave_file: &str, count: u8) -> Self {
-        info!("Setting up enclave doorbell for up to {} threads", count);
+        info!("🚪 Setting up enclave doorbell for up to {} threads", count);
         Self {
             enclave: init_enclave(enclave_file),
             condvar: Condvar::new(),
