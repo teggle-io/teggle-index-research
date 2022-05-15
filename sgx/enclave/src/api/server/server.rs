@@ -1,20 +1,13 @@
-use lazy_static::lazy_static;
 use mio::{Token};
 use mio::event::Event;
 use mio::net::{TcpListener};
 use net2::TcpBuilder;
 use net2::unix::UnixTcpBuilderExt;
-use std::sync::{Arc};
 use std::collections::HashMap;
-use std::io::ErrorKind;
-use api::service::config::make_config;
-use api::service::connection::Connection;
+use api::server::config::{CONFIG};
+use api::server::connection::Connection;
 
 const LISTENER: Token = Token(0);
-
-lazy_static! {
-    static ref CONFIG: Arc<rustls::ServerConfig> = make_config();
-}
 
 struct Server {
     server: TcpListener,
@@ -33,7 +26,9 @@ impl Server {
 
     fn accept(&mut self, poll: &mut mio::Poll) -> bool {
         match self.server.accept() {
-            Ok((socket, _addr)) => {
+            Ok((socket, addr)) => {
+                debug!("accepted connection: {}", addr);
+
                 let session = rustls::ServerSession::new(&CONFIG.clone());
 
                 let token = Token(self.next_id);
@@ -52,14 +47,7 @@ impl Server {
                 true
             }
             Err(e) => {
-                match e.kind() {
-                    // Ignore (happens sometimes because we're sharing the socket).
-                    ErrorKind::WouldBlock => {}
-                    _ => {
-                        println!("encountered error while accepting connection; err={:?}", e);
-                    }
-                }
-
+                warn!("encountered error while accepting connection; err={:?}", e);
                 false
             }
         }

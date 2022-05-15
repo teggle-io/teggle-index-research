@@ -1,10 +1,10 @@
-use std::{thread};
+use std::thread;
 use std::ffi::CString;
 
 use log::warn;
 use sgx_types::*;
 
-use enclave::ecall::api::{ecall_api_service_start};
+use enclave::ecall::api::ecall_api_server_start;
 use ENCLAVE_DOORBELL;
 
 const THREAD_NUM: u8 = 8;
@@ -19,7 +19,7 @@ pub(crate) fn start_api_service(addr: String) {
         let addr = addr.clone();
 
         children.push(thread::spawn(move || {
-            info!("🚀 Starting API service ({}) [{:?}]", &addr, thread::current().id());
+            info!("🚀 Starting API server ({}) [{:?}]", &addr, thread::current().id());
 
             let enclave_access_token = ENCLAVE_DOORBELL
                 .get_access(false) // This can never be recursive
@@ -28,8 +28,8 @@ pub(crate) fn start_api_service(addr: String) {
 
             let c_addr: CString = CString::new(addr).unwrap();
             let result = unsafe {
-                ecall_api_service_start(enclave.geteid(),
-                                        c_addr.as_bytes_with_nul().as_ptr() as *const c_char)
+                ecall_api_server_start(enclave.geteid(),
+                                       c_addr.as_bytes_with_nul().as_ptr() as *const c_char)
             };
 
             match result {

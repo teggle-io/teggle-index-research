@@ -1,9 +1,14 @@
 use alloc::vec::Vec;
 
-use std::untrusted::fs;
+use lazy_static::lazy_static;
+use rustls::NoClientAuth;
 use std::io::BufReader;
-use rustls::{NoClientAuth};
-use std::sync::{Arc};
+use std::sync::Arc;
+use std::untrusted::fs;
+
+lazy_static! {
+    pub(crate) static ref CONFIG: Arc<rustls::ServerConfig> = make_config();
+}
 
 fn load_certs(filename: &str) -> Vec<rustls::Certificate> {
     let certfile = fs::File::open(filename).expect("cannot open certificate file");
