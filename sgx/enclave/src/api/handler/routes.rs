@@ -1,8 +1,10 @@
 use alloc::string::String;
 use alloc::sync::Arc;
+
 use lazy_static::lazy_static;
 
 use api::handler::router::Router;
+use api::middleware::recovery::middleware_recovery;
 
 lazy_static! {
     pub(crate) static ref ROUTER: Arc<Router> = Arc::new(build_routes());
@@ -10,7 +12,15 @@ lazy_static! {
 
 fn build_routes() -> Router {
     let mut r = Router::new();
+
+    r.require(middleware_recovery);
+
     r.route("/test", |mut r| {
+        r.require(|req, res, next| {
+            info!("inside test");
+            next(req, res)
+        });
+
         r.get("/ping", |_req, res| {
             res.ok("PONG");
             Ok(())

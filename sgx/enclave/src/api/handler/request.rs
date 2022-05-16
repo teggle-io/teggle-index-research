@@ -8,8 +8,6 @@ use http::header::AsHeaderName;
 use http::request::Parts;
 use log::warn;
 use std::collections::HashMap;
-use std::panic;
-use std::panic::AssertUnwindSafe;
 
 use api::handler::codec::GLOBAL_CODEC;
 use api::handler::response::Response;
@@ -25,24 +23,16 @@ pub(crate) fn process_raw_request(request_body: Vec<u8>) -> EncodedResponseResul
             let mut req = Request::new(req);
             let mut res = Response::from_request(&req);
 
-            match panic::catch_unwind(AssertUnwindSafe(|| {
-                return match route_request(&mut req, &mut res) {
-                    Ok(()) => {
-                        res.encode()
-                    }
-                    Err(e) => {
-                        warn!("failed to dispatch request - {:?}", e);
-                        res.fault();
-                        res.encode()
-                    }
-                };
-            })) {
-                Ok(r) => r,
-                Err(e) => {
-                    warn!("recovered from panic during request - {:?}", e);
-                    Response::encode_fault() // do not trust req.
+            return match route_request(&mut req, &mut res) {
+                Ok(()) => {
+                    res.encode()
                 }
-            }
+                Err(e) => {
+                    warn!("failed to dispatch request - {:?}", e);
+                    res.fault();
+                    res.encode()
+                }
+            };
         }
         Ok(None) => {
             warn!("failed to decode request");
