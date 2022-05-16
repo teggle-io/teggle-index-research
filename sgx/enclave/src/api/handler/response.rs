@@ -1,106 +1,137 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::convert::TryFrom;
 
 use bytes::BytesMut;
-use http::{Request, Response, StatusCode};
-use http::response::Builder;
-use log::warn;
+use http::{HeaderValue, StatusCode, Version};
+use http::header::HeaderName;
+use http::response::{Parts};
 use serde::Serialize;
 
 use api::handler::codec::GLOBAL_CODEC;
-use api::handler::request::{should_keep_alive};
-use api::handler::types::{ApiError, ResponseBody, ResponseBodyResult, ResponseResult};
+use api::handler::request::Request;
+use api::handler::types::{ApiError, EncodedResponseResult, ResponseBody};
 
-pub(crate) fn encode_response(
-    req: Option<&Request<()>>,
-    res: Response<Vec<u8>>
-) -> ResponseBodyResult {
-    let mut close = false;
-    if !should_keep_alive(req) {
-        close = true;
-    }
-
-    encode_response_with_close(req, res, close)
+pub(crate) struct Response {
+    parts: Parts,
+    body_bytes: Option<Vec<u8>>,
+    close: bool,
 }
 
-pub(crate) fn encode_response_with_close(
-    _req: Option<&Request<()>>,
-    res: Response<Vec<u8>>,
-    close: bool
-) -> ResponseBodyResult {
-    let mut encoded = BytesMut::new();
+impl Response {
+    #[inline]
+    pub(crate) fn new() -> Self {
+        let mut parts = Parts::new();
+        parts.status = StatusCode::OK;
 
-    match GLOBAL_CODEC.encode(res, &mut encoded) {
-        Ok(_) => Ok(ResponseBody::new_with_close(encoded.to_vec(), close)),
-        Err(e) => Err(ApiError::new(e.to_string()))
-    }
-}
-
-pub(crate) fn encode_response_server_fault(req: Option<&Request<()>>) -> ResponseBodyResult {
-    match error_response(req,
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "Server Fault") {
-        Ok(res) => encode_response_with_close(req, res, true),
-        Err(e) => {
-            warn!("api: failed to encode server fault response - {:?}", e);
-            Err(e)
+        Self {
+            parts,
+            body_bytes: None,
+            close: true,
         }
     }
-}
 
-pub(crate) fn error_response(
-    req: Option<&Request<()>>,
-    status: StatusCode,
-    msg: &str
-) -> ResponseResult {
-    json_response(req, status, &ErrorMsg { status: u16::from(status), message: msg.to_string() })
-}
+    #[inline]
+    pub(crate) fn from_request(req: &Request) -> Self {
+        let mut res = Self::new();
+        res.version(req.version());
+        res.close = !req.should_keep_alive();
+        res
+    }
 
-pub(crate) fn ok_response(
-    req: Option<&Request<()>>,
-    msg: &str
-) -> ResponseResult {
-    json_response(req, StatusCode::OK, &Msg { message: msg.to_string() })
-}
+    #[inline]
+    pub(crate) fn encode_fault() -> EncodedResponseResult {
+        let mut res = Self::new();
+        res.fault();
+        res.encode()
+    }
 
-pub(crate) fn json_response<T: ?Sized + Serialize>(
-    req: Option<&Request<()>>,
-    status: StatusCode,
-    data: &T
-) -> ResponseResult {
-    match serde_json::to_vec(data) {
-        Ok(res_body) => {
-            match default_response(req)
-                .status(status)
-                .header(http::header::CONTENT_TYPE, "application/json")
-                .body(res_body) {
-                Ok(res) => {
-                    Ok(res)
-                }
-                Err(e) => {
-                    Err(ApiError::new(
-                        format!("failed to encode json response: {:?}", e)
-                    ))
-                }
+    #[inline]
+    pub fn status<T>(&mut self, status: T) -> &mut Self
+        where
+            StatusCode: TryFrom<T>,
+            <StatusCode as TryFrom<T>>::Error: Into<http::Error>,
+    {
+        self.parts.status = TryFrom::try_from(status).map_err(Into::into).unwrap();
+        self
+    }
+
+    #[inline]
+    pub fn version(&mut self, version: Version) -> &mut Self {
+        self.parts.version = version;
+        self
+    }
+
+    #[inline]
+    pub fn header<K, V>(&mut self, key: K, value: V) -> &mut Self
+        where
+            HeaderName: TryFrom<K>,
+            <HeaderName as TryFrom<K>>::Error: Into<http::Error>,
+            HeaderValue: TryFrom<V>,
+            <HeaderValue as TryFrom<V>>::Error: Into<http::Error>,
+    {
+        let name = <HeaderName as TryFrom<K>>::try_from(key).map_err(Into::into).unwrap();
+        let value = <HeaderValue as TryFrom<V>>::try_from(value).map_err(Into::into).unwrap();
+        self.parts.headers.append(name, value);
+        self
+    }
+
+    #[inline]
+    pub fn body(&mut self, body: Vec<u8>) -> &mut Self {
+        self.body_bytes = Some(body);
+        self
+    }
+
+    #[inline]
+    pub fn json<T: ?Sized + Serialize>(
+        &mut self,
+        data: &T,
+    ) -> Result<(), serde_json::Error> {
+        match serde_json::to_vec(data) {
+            Ok(res_body) => {
+                self.header(http::header::CONTENT_TYPE, "application/json")
+                    .body(res_body);
+
+                Ok(())
+            }
+            Err(e) => {
+                Err(e)
             }
         }
-        Err(e) => {
-            Err(ApiError::new(
-                format!("failed to serialise json response: {:?}", e)
-            ))
+    }
+
+    pub fn ok(&mut self, msg: &str) -> &mut Self {
+        self.json(&Msg { message: msg.to_string() }).unwrap();
+        self.status(StatusCode::OK);
+        self
+    }
+
+    pub fn error(&mut self, status: StatusCode, msg: &str) -> &mut Self {
+        self.json(&ErrorMsg { status: u16::from(status), message: msg.to_string() }).unwrap();
+        self.status(status);
+        self
+    }
+
+    pub fn fault(&mut self) -> &mut Self {
+        self.error(StatusCode::INTERNAL_SERVER_ERROR,
+                   "Server Fault")
+    }
+
+    pub fn encode(self) -> EncodedResponseResult {
+        match self.body_bytes {
+            Some(body) => {
+                let mut encoded = BytesMut::new();
+                let res: http::Response<Vec<u8>> = http::Response::from_parts(self.parts, body);
+
+                match GLOBAL_CODEC.encode(res, &mut encoded) {
+                    Ok(_) => Ok(ResponseBody::new_with_close(encoded.to_vec(), self.close)),
+                    Err(e) => Err(ApiError::new(e.to_string()))
+                }
+            }
+            None => Err(ApiError::new(
+                "encode called on response with no body".to_string()))
         }
     }
-}
-
-pub(crate) fn default_response(req: Option<&Request<()>>) -> Builder {
-    let mut builder = Response::builder()
-        .status(StatusCode::OK);
-
-    if let Some(req) = req {
-        builder = builder.version(req.version());
-    }
-
-    builder
 }
 
 #[derive(Serialize, Deserialize)]

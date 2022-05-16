@@ -57,7 +57,7 @@ impl HttpCodec {
         return Ok(());
     }
 
-    pub(crate) fn decode(&self, src: &mut BytesMut) -> io::Result<Option<Request<()>>> {
+    pub(crate) fn decode(&self, src: &mut BytesMut) -> io::Result<Option<Request<Vec<u8>>>> {
         // TODO: we should grow this headers array if parsing fails and asks
         //       for more headers
         let mut headers = [None; 16];
@@ -122,8 +122,11 @@ impl HttpCodec {
             ret = ret.header(&data[k.0..k.1], value);
         }
 
+        // TODO: GET BODY
+        let body: Vec<u8> = Vec::new();
+
         let req = ret
-            .body(())
+            .body(body)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
         Ok(Some(req))

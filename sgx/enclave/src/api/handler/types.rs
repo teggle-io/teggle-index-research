@@ -1,9 +1,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
-use http::Response;
 
-pub(crate) type ResponseResult = Result<Response<Vec<u8>>, ApiError>;
-pub(crate) type ResponseBodyResult = Result<ResponseBody, ApiError>;
+pub(crate) type EncodedResponseResult = Result<ResponseBody, ApiError>;
 
 #[derive(Clone)]
 pub(crate) struct ResponseBody {
