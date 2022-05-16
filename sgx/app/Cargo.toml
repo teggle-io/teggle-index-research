@@ -6,7 +6,10 @@ build = "build.rs"
 
 [features]
 default = []
-production = []
+production = [
+    "log/max_level_warn",
+    "log/release_max_level_warn"
+]
 
 [dependencies]
 sgx_types = { rev = "v1.1.3", git = "https://github.com/apache/teaclave-sgx-sdk.git" }
