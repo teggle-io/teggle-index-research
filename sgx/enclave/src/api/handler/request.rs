@@ -1,5 +1,6 @@
-use alloc::string::String;
+use alloc::string::{String};
 use alloc::vec::Vec;
+use core::str::FromStr;
 
 use bytes::BytesMut;
 use http::header::AsHeaderName;
@@ -56,8 +57,29 @@ impl Request {
     }
 
     #[inline]
-    pub(crate) fn set_path_vars(&mut self, vars: HashMap<String, String>) {
+    pub(crate) fn path_vars(&mut self, vars: HashMap<String, String>) {
         self.path_vars = Some(vars)
+    }
+
+    #[inline]
+    pub fn path_var<R, S>(&self, key: S) -> Option<R>
+    where
+        R: FromStr,
+        S: Into<String>,
+    {
+        let key = key.into();
+        if let Some(pv) = self.path_vars.as_ref() {
+            if let Some(str_pv) = pv.get(key.as_str()) {
+                return match str::parse(str_pv) {
+                    Ok(v) => {
+                        Some(v)
+                    }
+                    _ => None
+                }
+            }
+        }
+
+        None
     }
 
     #[inline]

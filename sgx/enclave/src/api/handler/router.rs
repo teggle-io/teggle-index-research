@@ -20,7 +20,7 @@ const CAPTURE_PLACEHOLDER: &'static str = "*CAPTURE*";
 pub(crate) fn route_request(req: &mut Request, res: &mut Response) -> Result<(), ApiError> {
     match ROUTER.clone().find(req.method(), req.uri().path()) {
         Some((handler, captures)) => {
-            req.set_path_vars(captures);
+            req.path_vars(captures);
 
             handler(&req, res)
         }
@@ -158,14 +158,13 @@ impl Router {
                     break;
                 }
 
-                match handler {
-                    Some(handler) => {
-                        Some((handler, captures))
-                    }
-                    None => None
+                if let Some(handler) = handler {
+                    return Some((handler, captures));
                 }
+
+                return None;
             }
-            None => {
+            _ => {
                 match self.top.as_ref() {
                     Some(top) => {
                         match top.write() {
@@ -177,7 +176,7 @@ impl Router {
                             }
                         }
                     }
-                    None => {
+                    _ => {
                         unreachable!("Invalid state: Route with no routes or top!");
                     }
                 }
@@ -281,7 +280,7 @@ fn extract_route_handler_tokens<P>(method: Method, path: P) -> (String, Vec<Rout
         if part.starts_with(":") {
             key_parts.push(CAPTURE_PLACEHOLDER.to_string());
             tokens.push(RouteHandlerToken::Capture {
-                name: path.strip_prefix(":").unwrap().to_string()
+                name: part.strip_prefix(":").unwrap().to_string()
             });
         } else {
             key_parts.push(part.clone());

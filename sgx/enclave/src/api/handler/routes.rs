@@ -1,3 +1,4 @@
+use alloc::string::String;
 use alloc::sync::Arc;
 use lazy_static::lazy_static;
 
@@ -15,8 +16,24 @@ fn build_routes() -> Router {
             Ok(())
         });
     });
+
     r.get("/ping", |_req, res| {
         res.ok("PONG");
+        Ok(())
+    });
+
+    r.get("/hello/:name", |req, res| {
+        let name: Option<String> = req.path_var("name");
+        res.ok(format!("Hello {}", name.unwrap()).as_str());
+
+        Ok(())
+    });
+
+    r.get("/calc/:a/:b", |req, res| {
+        let a: Option<u32> = req.path_var("a");
+        let b: Option<u32> = req.path_var("b");
+        res.ok(format!("Sum {}", a.unwrap() + b.unwrap()).as_str());
+
         Ok(())
     });
 
