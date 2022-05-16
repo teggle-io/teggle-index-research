@@ -1,17 +1,19 @@
-use alloc::string::{String};
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::str::FromStr;
 
 use bytes::BytesMut;
-use http::header::AsHeaderName;
 use http::{Extensions, HeaderMap, HeaderValue, Method, Uri, Version};
+use http::header::AsHeaderName;
 use http::request::Parts;
 use log::warn;
 use std::collections::HashMap;
+use std::panic;
+use std::panic::AssertUnwindSafe;
 
 use api::handler::codec::GLOBAL_CODEC;
+use api::handler::response::Response;
 use api::handler::router::route_request;
-use api::handler::response::{Response};
 use api::handler::types::EncodedResponseResult;
 
 static CONN_KEEPALIVE: &str = "keep-alive";
@@ -23,14 +25,22 @@ pub(crate) fn process_raw_request(request_body: Vec<u8>) -> EncodedResponseResul
             let mut req = Request::new(req);
             let mut res = Response::from_request(&req);
 
-            return match route_request(&mut req, &mut res) {
-                Ok(()) => {
-                    res.encode()
-                }
+            match panic::catch_unwind(AssertUnwindSafe(|| {
+                return match route_request(&mut req, &mut res) {
+                    Ok(()) => {
+                        res.encode()
+                    }
+                    Err(e) => {
+                        warn!("failed to dispatch request - {:?}", e);
+                        res.fault();
+                        res.encode()
+                    }
+                };
+            })) {
+                Ok(r) => r,
                 Err(e) => {
-                    warn!("failed to dispatch request - {:?}", e);
-                    res.fault();
-                    res.encode()
+                    warn!("recovered from panic during request - {:?}", e);
+                    Response::encode_fault() // do not trust req.
                 }
             }
         }
@@ -42,7 +52,7 @@ pub(crate) fn process_raw_request(request_body: Vec<u8>) -> EncodedResponseResul
             warn!("failed to decode request - {:?}", e);
             Response::encode_fault()
         }
-    }
+    };
 }
 
 pub(crate) struct Request {
@@ -63,23 +73,15 @@ impl Request {
 
     #[inline]
     pub fn path_var<R, S>(&self, key: S) -> Option<R>
-    where
-        R: FromStr,
-        S: Into<String>,
+        where
+            R: FromStr,
+            S: Into<String>,
     {
         let key = key.into();
-        if let Some(pv) = self.path_vars.as_ref() {
-            if let Some(str_pv) = pv.get(key.as_str()) {
-                return match str::parse(str_pv) {
-                    Ok(v) => {
-                        Some(v)
-                    }
-                    _ => None
-                }
-            }
-        }
-
-        None
+        self.path_vars.as_ref()?
+            .get(key.as_str())?
+            .parse()
+            .ok()
     }
 
     #[inline]
@@ -87,7 +89,7 @@ impl Request {
         if let Some(conn) = self.headers().get(key) {
             if let Ok(conn) = conn.to_str() {
                 if conn.eq_ignore_ascii_case(val) {
-                    return true
+                    return true;
                 }
             }
         }

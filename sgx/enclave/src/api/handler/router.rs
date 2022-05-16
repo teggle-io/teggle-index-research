@@ -1,6 +1,7 @@
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::slice::Iter;
 
 use http::{Method, StatusCode};
 use std::collections::HashMap;
@@ -13,6 +14,7 @@ use api::handler::routes::ROUTER;
 use api::handler::types::ApiError;
 
 type Handler = fn(&Request, &mut Response) -> Result<(), ApiError>;
+type Middleware = fn(&Request, &mut Response, next: Handler) -> Result<(), ApiError>;
 
 const CAPTURE_PLACEHOLDER: &'static str = "*CAPTURE*";
 
@@ -22,7 +24,7 @@ pub(crate) fn route_request(req: &mut Request, res: &mut Response) -> Result<(),
         Some((handler, captures)) => {
             req.path_vars(captures);
 
-            handler(&req, res)
+            handler.route(req, res)
         }
         None => {
             res.error(StatusCode::NOT_FOUND, "Not Found");
@@ -36,6 +38,7 @@ pub(crate) struct Router {
     top: Option<Arc<SgxRwLock<Router>>>,
     routes: Option<HashMap<String, RouteHandler>>,
     path: Option<PathBuf>,
+    middleware: Vec<Middleware>,
 }
 
 impl Router {
@@ -44,12 +47,14 @@ impl Router {
             top: None,
             routes: Some(HashMap::new()),
             path: None,
+            middleware: Vec::new(),
         };
 
         Self {
             top: Some(Arc::new(SgxRwLock::new(top))),
             routes: None,
             path: None,
+            middleware: Vec::new(),
         }
     }
 
@@ -60,6 +65,7 @@ impl Router {
             top: self.top.clone(),
             routes: None,
             path: self.push_path(path),
+            middleware: self.middleware.clone(),
         };
 
         func(r);
@@ -67,41 +73,48 @@ impl Router {
 
     #[allow(dead_code)]
     #[inline]
-    pub fn get(&mut self, path: &str, handler: Handler) {
+    pub fn require(&mut self, middleware: Middleware) -> &mut Self{
+        self.middleware.push(middleware);
+        self
+    }
+
+    #[allow(dead_code)]
+    #[inline]
+    pub fn get(&mut self, path: &str, handler: Handler) -> &mut Self {
         self.add_route(Method::GET, self.push_path(path).unwrap(), handler)
     }
 
     #[allow(dead_code)]
     #[inline]
-    pub fn put(&mut self, path: &str, handler: Handler) {
+    pub fn put(&mut self, path: &str, handler: Handler) -> &mut Self {
         self.add_route(Method::PUT, self.push_path(path).unwrap(), handler)
     }
 
     #[allow(dead_code)]
     #[inline]
-    pub fn post(&mut self, path: &str, handler: Handler) {
+    pub fn post(&mut self, path: &str, handler: Handler) -> &mut Self {
         self.add_route(Method::POST, self.push_path(path).unwrap(), handler)
     }
 
     #[allow(dead_code)]
     #[inline]
-    pub fn delete(&mut self, path: &str, handler: Handler) {
+    pub fn delete(&mut self, path: &str, handler: Handler) -> &mut Self {
         self.add_route(Method::DELETE, self.push_path(path).unwrap(), handler)
     }
 
     #[allow(dead_code)]
     #[inline]
-    pub fn patch(&mut self, path: &str, handler: Handler) {
+    pub fn patch(&mut self, path: &str, handler: Handler) -> &mut Self {
         self.add_route(Method::PATCH, self.push_path(path).unwrap(), handler)
     }
 
     #[allow(dead_code)]
     #[inline]
-    pub fn head(&mut self, path: &str, handler: Handler) {
+    pub fn head(&mut self, path: &str, handler: Handler) -> &mut Self {
         self.add_route(Method::HEAD, self.push_path(path).unwrap(), handler)
     }
 
-    pub fn find<P>(&self, method: &Method, path: P) -> Option<(Handler, HashMap<String, String>)>
+    pub fn find<P>(&self, method: &Method, path: P) -> Option<(RouteHandler, HashMap<String, String>)>
         where
             String: From<P>
     {
@@ -112,7 +125,7 @@ impl Router {
                 let path_parts: Vec<&str> = path.split("/").collect();
                 let path_parts_len = path_parts.len();
 
-                let mut handler: Option<Handler> = None;
+                let mut handler: Option<&RouteHandler> = None;
                 let mut captures: HashMap<String, String> = HashMap::new();
 
                 for (_unique, cur) in routes.into_iter() {
@@ -154,12 +167,12 @@ impl Router {
                         continue;
                     }
 
-                    handler = Some(cur.handler);
+                    handler = Some(cur);
                     break;
                 }
 
                 if let Some(handler) = handler {
-                    return Some((handler, captures));
+                    return Some((handler.clone(), captures));
                 }
 
                 return None;
@@ -200,12 +213,13 @@ impl Router {
         }
     }
 
-    fn add_route(&mut self, method: Method, path: PathBuf, handler: Handler) {
+    fn add_route(&mut self, method: Method, path: PathBuf, handler: Handler) -> &mut Self {
         match self.routes.as_mut() {
             Some(routes) => {
                 let path = path.to_str().unwrap();
                 let route_handler =
-                    RouteHandler::new(method.clone(), path, handler);
+                    RouteHandler::new(method.clone(), path, handler,
+                                      self.middleware.clone());
 
                 match routes.get(&route_handler.unique) {
                     None => {
@@ -235,19 +249,23 @@ impl Router {
                     }
                 }
             }
-        }
+        };
+
+        self
     }
 }
 
-struct RouteHandler {
+#[derive(Clone)]
+pub(crate) struct RouteHandler {
     unique: String,
     method: Method,
     tokens: Vec<RouteHandlerToken>,
     handler: Handler,
+    middleware: Vec<Middleware>,
 }
 
 impl RouteHandler {
-    fn new<P>(method: Method, path: P, handler: Handler) -> Self
+    fn new<P>(method: Method, path: P, handler: Handler, middleware: Vec<Middleware>) -> Self
         where
             String: From<P>
     {
@@ -255,11 +273,35 @@ impl RouteHandler {
             extract_route_handler_tokens(method.clone(), path);
 
         Self {
-            unique, method, tokens, handler
+            unique, method, tokens, handler, middleware
         }
+    }
+
+    fn route(&self, req: &mut Request, res: &mut Response) -> Result<(), ApiError> {
+        let handler = self.handler;
+        let mut middleware = self.middleware.clone();
+        middleware.push(|req, res, _next| {
+            // Last middleware to call handler, do not call next.
+            handler(req, res)
+        });
+        let mut miter = self.middleware.iter();
+
+        // Kick it all off.
+        _route_step(req, res, &mut miter)
     }
 }
 
+fn _route_step(req: &mut Request, res: &mut Response, miter: &mut Iter<Middleware>) -> Result<(), ApiError> {
+    if let Some(cur) = miter.next() {
+        return cur(req, res, move |mut req, mut res| {
+            _route_step(&mut req, &mut res, miter)
+        });
+    }
+
+    Ok(())
+}
+
+#[derive(Clone)]
 enum RouteHandlerToken {
     Path { value: String },
     Capture { name: String },

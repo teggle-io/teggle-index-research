@@ -15,6 +15,10 @@ fn build_routes() -> Router {
             res.ok("PONG");
             Ok(())
         });
+
+        r.get("/panic", |_req, _res| {
+            panic!("YELP");
+        });
     });
 
     r.get("/ping", |_req, res| {
