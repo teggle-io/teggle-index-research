@@ -46,7 +46,6 @@ extern crate mio;
 extern crate net2;
 extern crate http;
 extern crate httparse;
-extern crate path_router;
 extern crate bytes;
 extern crate serde;
 #[macro_use]

@@ -1,3 +1,4 @@
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use bytes::BytesMut;
@@ -5,6 +6,7 @@ use http::header::AsHeaderName;
 use http::{Extensions, HeaderMap, HeaderValue, Method, Uri, Version};
 use http::request::Parts;
 use log::warn;
+use std::collections::HashMap;
 
 use api::handler::codec::GLOBAL_CODEC;
 use api::handler::router::route_request;
@@ -17,10 +19,10 @@ pub(crate) fn process_raw_request(request_body: Vec<u8>) -> EncodedResponseResul
     return match GLOBAL_CODEC.decode(&mut BytesMut::from(request_body.as_slice())) {
         Ok(Some(req)) => {
             // Wrap request in handler::Request
-            let req = Request::new(req);
+            let mut req = Request::new(req);
             let mut res = Response::from_request(&req);
 
-            return match route_request(&req, &mut res) {
+            return match route_request(&mut req, &mut res) {
                 Ok(()) => {
                     res.encode()
                 }
@@ -44,12 +46,18 @@ pub(crate) fn process_raw_request(request_body: Vec<u8>) -> EncodedResponseResul
 
 pub(crate) struct Request {
     req: http::Request<Vec<u8>>,
+    path_vars: Option<HashMap<String, String>>,
 }
 
 impl Request {
     #[inline]
     pub(crate) fn new(req: http::Request<Vec<u8>>) -> Self {
-        Self { req }
+        Self { req, path_vars: None }
+    }
+
+    #[inline]
+    pub(crate) fn set_path_vars(&mut self, vars: HashMap<String, String>) {
+        self.path_vars = Some(vars)
     }
 
     #[inline]

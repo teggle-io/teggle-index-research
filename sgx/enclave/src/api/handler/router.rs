@@ -1,7 +1,6 @@
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::borrow::Borrow;
 
 use http::{Method, StatusCode};
 use std::collections::HashMap;
@@ -10,31 +9,20 @@ use std::sync::SgxRwLock;
 
 use api::handler::request::Request;
 use api::handler::response::Response;
+use api::handler::routes::ROUTER;
 use api::handler::types::ApiError;
 
-type Handler = fn(&Request, &mut Response, Vec<(String, String)>) -> Result<(), ApiError>;
+type Handler = fn(&Request, &mut Response) -> Result<(), ApiError>;
 
 const CAPTURE_PLACEHOLDER: &'static str = "*CAPTURE*";
 
-pub(crate) fn route_request(req: &Request, res: &mut Response) -> Result<(), ApiError> {
-    let route = format!("{}{}", req.method(), req.uri().path());
-    let mut routes: path_router::Tree<Handler> = path_router::Tree::new();
-    routes.add("GET/ping", |_req, res, _captures| {
-        res.ok("PONG");
-        Ok(())
-    });
-
-    let r = Router::new();
-    r.route("/test", |mut r| {
-        r.get("/ping", |_req, res, _captures| {
-            res.ok("PONG");
-            Ok(())
-        });
-    });
-
-    match routes.find(&route) {
+#[inline]
+pub(crate) fn route_request(req: &mut Request, res: &mut Response) -> Result<(), ApiError> {
+    match ROUTER.clone().find(req.method(), req.uri().path()) {
         Some((handler, captures)) => {
-            handler(&req, res, captures)
+            req.set_path_vars(captures);
+
+            handler(&req, res)
         }
         None => {
             res.error(StatusCode::NOT_FOUND, "Not Found");
@@ -65,6 +53,8 @@ impl Router {
         }
     }
 
+    #[allow(dead_code)]
+    #[inline]
     pub fn route(&self, path: &str, func: fn(Router)) {
         let r = Router {
             top: self.top.clone(),
@@ -75,19 +65,51 @@ impl Router {
         func(r);
     }
 
+    #[allow(dead_code)]
+    #[inline]
     pub fn get(&mut self, path: &str, handler: Handler) {
         self.add_route(Method::GET, self.push_path(path).unwrap(), handler)
     }
 
-    pub fn find<P>(&mut self, method: Method, path: P) -> Option<(Handler, HashMap<String, String>)>
+    #[allow(dead_code)]
+    #[inline]
+    pub fn put(&mut self, path: &str, handler: Handler) {
+        self.add_route(Method::PUT, self.push_path(path).unwrap(), handler)
+    }
+
+    #[allow(dead_code)]
+    #[inline]
+    pub fn post(&mut self, path: &str, handler: Handler) {
+        self.add_route(Method::POST, self.push_path(path).unwrap(), handler)
+    }
+
+    #[allow(dead_code)]
+    #[inline]
+    pub fn delete(&mut self, path: &str, handler: Handler) {
+        self.add_route(Method::DELETE, self.push_path(path).unwrap(), handler)
+    }
+
+    #[allow(dead_code)]
+    #[inline]
+    pub fn patch(&mut self, path: &str, handler: Handler) {
+        self.add_route(Method::PATCH, self.push_path(path).unwrap(), handler)
+    }
+
+    #[allow(dead_code)]
+    #[inline]
+    pub fn head(&mut self, path: &str, handler: Handler) {
+        self.add_route(Method::HEAD, self.push_path(path).unwrap(), handler)
+    }
+
+    pub fn find<P>(&self, method: &Method, path: P) -> Option<(Handler, HashMap<String, String>)>
         where
             String: From<P>
     {
-        match self.routes.as_mut() {
+        match self.routes.as_ref() {
             Some(routes) => {
                 let method = method.as_str();
                 let path: String = path.into();
-                let mut path_parts: Vec<&str> = path.split("/").collect();
+                let path_parts: Vec<&str> = path.split("/").collect();
                 let path_parts_len = path_parts.len();
 
                 let mut handler: Option<Handler> = None;
@@ -147,7 +169,7 @@ impl Router {
                 match self.top.as_ref() {
                     Some(top) => {
                         match top.write() {
-                            Ok(mut top) => {
+                            Ok(top) => {
                                 top.find(method, path)
                             }
                             Err(e) => {
@@ -165,9 +187,16 @@ impl Router {
 
     // private
 
+    #[inline]
     fn push_path(&self, path: &str) -> Option<PathBuf> {
         match self.path.as_ref() {
-            Some(p) => Some(p.clone()),
+            Some(p) => {
+                // Sub paths need to be relative.
+                let path = path.strip_prefix("/").unwrap();
+                let mut new_path = p.clone();
+                new_path.push(path);
+                Some(new_path)
+            },
             None => Some(PathBuf::from(path))
         }
     }
