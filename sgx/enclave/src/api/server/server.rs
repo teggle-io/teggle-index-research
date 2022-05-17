@@ -1,17 +1,25 @@
-use mio::{Token};
+use alloc::sync::Arc;
+
+use mio::Token;
 use mio::event::Event;
-use mio::net::{TcpListener};
+use mio::net::TcpListener;
 use net2::TcpBuilder;
 use net2::unix::UnixTcpBuilderExt;
 use std::collections::HashMap;
-use api::server::config::{CONFIG};
+
+use api::server::config::Config;
 use api::server::connection::Connection;
 
 const LISTENER: Token = Token(0);
 
+const MAX_BYTES_RECEIVED: usize = 50 * 1024; // 50 Kb
+const TCP_BACKLOG: i32 = 1024;
+const MIO_EVENTS_CAPACITY: usize = 1024;
+
 struct Server {
     server: TcpListener,
     connections: HashMap<Token, Connection>,
+    config: Arc<Config>,
     next_id: usize,
 }
 
@@ -20,6 +28,8 @@ impl Server {
         Self {
             server,
             connections: HashMap::new(),
+            config: Arc::new(Config::new(
+                MAX_BYTES_RECEIVED)),
             next_id: 2,
         }
     }
@@ -29,7 +39,8 @@ impl Server {
             Ok((socket, addr)) => {
                 debug!("accepted connection: {}", addr);
 
-                let session = rustls::ServerSession::new(&CONFIG.clone());
+                let session = rustls::ServerSession::new(
+                    &self.config.tls_config().clone());
 
                 let token = Token(self.next_id);
 
@@ -41,7 +52,8 @@ impl Server {
 
                 self.connections.insert(token, Connection::new(socket,
                                                                session,
-                                                               token));
+                                                               token,
+                                                               self.config.clone()));
                 self.connections.get_mut(&token).unwrap().register(poll);
 
                 true
@@ -75,7 +87,7 @@ pub(crate) fn start_api_server(addr: &str) {
             .reuse_address(true).unwrap()
             .reuse_port(true).unwrap()
             .bind(&addr).unwrap()
-            .listen(1024).unwrap()).unwrap();
+            .listen(TCP_BACKLOG).unwrap()).unwrap();
 
     let mut poll = mio::Poll::new().unwrap();
     poll.register(&listener,
@@ -84,7 +96,8 @@ pub(crate) fn start_api_server(addr: &str) {
                   mio::PollOpt::level()).unwrap();
 
     let mut server = Server::new(listener);
-    let mut events = mio::Events::with_capacity(1024);
+    let mut events = mio::Events::with_capacity(
+        MIO_EVENTS_CAPACITY);
 
     'outer: loop {
         poll.poll(&mut events, None)

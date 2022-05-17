@@ -29,6 +29,13 @@ fn build_routes() -> Router {
         r.get("/panic", |_req, _res| {
             panic!("YELP");
         });
+
+        r.post("/post", |req, res| {
+            println!("Received: {:?}", req.body());
+
+            res.ok("Ok");
+            Ok(())
+        });
     });
 
     r.get("/ping", |_req, res| {

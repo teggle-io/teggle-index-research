@@ -1,19 +1,25 @@
-use alloc::string::String;
+use alloc::boxed::Box;
+use alloc::string::{String, ToString};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use log::{trace, warn};
 use mio::event::Event;
-use mio::net::{TcpStream};
+use mio::net::TcpStream;
 use rustls::Session;
 use std::io;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::Shutdown;
+
 use api::handler::request::process_raw_request;
+use api::results::Error;
+use api::server::config::Config;
 
 pub(crate) struct Connection {
     socket: TcpStream,
     session: rustls::ServerSession,
     token: mio::Token,
+    config: Arc<Config>,
     closing: bool,
     closed: bool,
 }
@@ -21,12 +27,14 @@ pub(crate) struct Connection {
 impl Connection {
     pub(crate) fn new(socket: TcpStream,
            session: rustls::ServerSession,
-           token: mio::Token)
+           token: mio::Token,
+                      config: Arc<Config>)
            -> Self {
         Self {
             socket,
             session,
             token,
+            config,
             closing: false,
             closed: false,
         }
@@ -129,7 +137,7 @@ impl Connection {
     }
 
     fn read(&mut self, plaintext: &mut Vec<u8>) -> isize {
-        match self.session.read_to_end(plaintext) {
+        match self.read_to_end(plaintext) {
             Err(err) => {
                 if let io::ErrorKind::ConnectionAborted = err.kind() {
                     self.closing = true;
@@ -143,6 +151,10 @@ impl Connection {
                 plaintext.len() as isize
             }
         }
+    }
+
+    fn read_to_end(&mut self, buf: &mut Vec<u8>) -> std::io::Result<usize> {
+        read_to_end(&mut self.session, buf, self.config.max_bytes_received())
     }
 
     fn read_tls(&mut self) {
@@ -214,4 +226,89 @@ impl Connection {
     pub(crate) fn is_closed(&self) -> bool {
         self.closing
     }
+}
+
+// Copied from std::io::Read::read_to_end to retain performance
+
+struct Guard<'a> {
+    buf: &'a mut Vec<u8>,
+    len: usize,
+}
+
+impl Drop for Guard<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            self.buf.set_len(self.len);
+        }
+    }
+}
+
+// This uses an adaptive system to extend the vector when it fills. We want to
+// avoid paying to allocate and zero a huge chunk of memory if the reader only
+// has 4 bytes while still making large reads if the reader does have a ton
+// of data to return. Simply tacking on an extra DEFAULT_BUF_SIZE space every
+// time is 4,500 times (!) slower than a default reservation size of 32 if the
+// reader has a very small amount of data to return.
+//
+// Because we're extending the buffer with uninitialized data for trusted
+// readers, we need to make sure to truncate that if any of this panics.
+fn read_to_end<R: Read + ?Sized>(r: &mut R, buf: &mut Vec<u8>, max_bytes: usize) -> std::io::Result<usize> {
+    read_to_end_with_reservation(r, buf, |_| 32, max_bytes)
+}
+
+fn read_to_end_with_reservation<R, F>(
+    r: &mut R,
+    buf: &mut Vec<u8>,
+    mut reservation_size: F,
+    max_bytes: usize
+) -> std::io::Result<usize>
+    where
+        R: Read + ?Sized,
+        F: FnMut(&R) -> usize,
+{
+    let start_len = buf.len();
+    let mut g = Guard { len: buf.len(), buf };
+    let ret;
+    loop {
+        if g.len >= max_bytes {
+            warn!("connection aborted: too many bytes sent (limit: {})", max_bytes);
+            
+            return Err(std::io::Error::new(
+                ErrorKind::ConnectionAborted,
+                    Box::new(
+                        Error::new("too many bytes sent".to_string()))
+            ));
+        }
+        if g.len == g.buf.len() {
+            unsafe {
+                // FIXME(danielhenrymantilla): #42788
+                //
+                //   - This creates a (mut) reference to a slice of
+                //     _uninitialized_ integers, which is **undefined behavior**
+                //
+                //   - Only the standard library gets to soundly "ignore" this,
+                //     based on its privileged knowledge of unstable rustc
+                //     internals;
+                g.buf.reserve(reservation_size(r));
+                let capacity = g.buf.capacity();
+                g.buf.set_len(capacity);
+                r.initializer().initialize(&mut g.buf[g.len..]);
+            }
+        }
+
+        match r.read(&mut g.buf[g.len..]) {
+            Ok(0) => {
+                ret = Ok(g.len - start_len);
+                break;
+            }
+            Ok(n) => g.len += n,
+            Err(ref e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(e) => {
+                ret = Err(e);
+                break;
+            }
+        }
+    }
+
+    ret
 }

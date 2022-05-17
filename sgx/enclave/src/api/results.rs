@@ -1,7 +1,8 @@
 use alloc::string::String;
+use core::fmt::{Display, Formatter};
 use alloc::vec::Vec;
 
-pub(crate) type EncodedResponseResult = Result<ResponseBody, ApiError>;
+pub(crate) type EncodedResponseResult = Result<ResponseBody, Error>;
 
 #[derive(Clone)]
 pub(crate) struct ResponseBody {
@@ -29,12 +30,22 @@ impl ResponseBody {
 }
 
 #[derive(Debug)]
-pub(crate) struct ApiError {
+pub(crate) struct Error {
     message: String
 }
 
-impl ApiError {
+impl Error {
     pub fn new(message: String) -> Self {
         Self { message }
     }
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for Error {
+    
 }

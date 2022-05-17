@@ -4,9 +4,9 @@ use std::panic::AssertUnwindSafe;
 use api::handler::request::Request;
 use api::handler::response::Response;
 use api::handler::router::Handler;
-use api::handler::types::ApiError;
+use api::results::Error;
 
-pub(crate) fn middleware_recovery(req: &Request, res: &mut Response, next: Handler) -> Result<(), ApiError> {
+pub(crate) fn middleware_recovery(req: &Request, res: &mut Response, next: Handler) -> Result<(), Error> {
     match panic::catch_unwind(AssertUnwindSafe(|| {
         next(req, res)
     })) {

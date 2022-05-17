@@ -10,17 +10,17 @@ use std::sync::SgxRwLock;
 use api::handler::request::Request;
 use api::handler::response::Response;
 use api::handler::routes::ROUTER;
-use api::handler::types::ApiError;
+use api::results::Error;
 
 const CAPTURE_PLACEHOLDER: &'static str = "*CAPTURE*";
 
-pub(crate) type Handler = Arc<dyn Send + Sync + Fn(&Request, &mut Response) -> Result<(), ApiError>>;
-pub(crate) type HandlerFn = fn(&Request, &mut Response) -> Result<(), ApiError>;
-pub(crate) type Middleware = Arc<dyn Send + Sync + Fn(&Request, &mut Response, Handler) -> Result<(), ApiError>>;
-pub(crate) type MiddlewareFn = fn(&Request, &mut Response, Handler) -> Result<(), ApiError>;
+pub(crate) type Handler = Arc<dyn Send + Sync + Fn(&Request, &mut Response) -> Result<(), Error>>;
+pub(crate) type HandlerFn = fn(&Request, &mut Response) -> Result<(), Error>;
+pub(crate) type Middleware = Arc<dyn Send + Sync + Fn(&Request, &mut Response, Handler) -> Result<(), Error>>;
+pub(crate) type MiddlewareFn = fn(&Request, &mut Response, Handler) -> Result<(), Error>;
 
 #[inline]
-pub(crate) fn route_request(req: &mut Request, res: &mut Response) -> Result<(), ApiError> {
+pub(crate) fn route_request(req: &mut Request, res: &mut Response) -> Result<(), Error> {
     match ROUTER.clone().find(req.method(), req.uri().path()) {
         Some((handler, captures)) => {
             req.path_vars(captures);
@@ -318,7 +318,7 @@ impl RouteHandler {
         }
     }
 
-    fn route(&self, req: &mut Request, res: &mut Response) -> Result<(), ApiError> {
+    fn route(&self, req: &mut Request, res: &mut Response) -> Result<(), Error> {
         let middleware: Vec<Middleware> = self.middleware.clone();
         _route_step(req, res, Arc::new(middleware), 0)
     }
@@ -329,7 +329,7 @@ fn _route_step(
     res: &mut Response,
     middleware: Arc<Vec<Middleware>>,
     level: usize
-) -> Result<(), ApiError> {
+) -> Result<(), Error> {
     let cur = middleware.get(level).unwrap();
     let last = level + 1 >= middleware.len();
     let middleware = middleware.clone();

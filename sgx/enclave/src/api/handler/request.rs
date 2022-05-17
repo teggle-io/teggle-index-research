@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use api::handler::codec::GLOBAL_CODEC;
 use api::handler::response::Response;
 use api::handler::router::route_request;
-use api::handler::types::EncodedResponseResult;
+use api::results::EncodedResponseResult;
 
 static CONN_KEEPALIVE: &str = "keep-alive";
 

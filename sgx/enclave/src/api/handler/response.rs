@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use api::handler::codec::GLOBAL_CODEC;
 use api::handler::request::Request;
-use api::handler::types::{ApiError, EncodedResponseResult, ResponseBody};
+use api::results::{EncodedResponseResult, Error, ResponseBody};
 
 pub(crate) struct Response {
     parts: Parts,
@@ -125,10 +125,10 @@ impl Response {
 
                 match GLOBAL_CODEC.encode(res, &mut encoded) {
                     Ok(_) => Ok(ResponseBody::new_with_close(encoded.to_vec(), self.close)),
-                    Err(e) => Err(ApiError::new(e.to_string()))
+                    Err(e) => Err(Error::new(e.to_string()))
                 }
             }
-            None => Err(ApiError::new(
+            None => Err(Error::new(
                 "encode called on response with no body".to_string()))
         }
     }
