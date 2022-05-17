@@ -22,6 +22,7 @@ impl Response {
     #[inline]
     pub(crate) fn new() -> Self {
         let mut parts = Parts::new();
+        parts.version = Version::HTTP_10;
         parts.status = StatusCode::OK;
 
         Self {
@@ -36,6 +37,15 @@ impl Response {
         let mut res = Self::new();
         res.version(req.version());
         res.close = !req.should_keep_alive();
+        res
+    }
+
+    #[inline]
+    pub fn from_error(err: &Error)-> Self {
+        let mut res = Self::new();
+        let status = err.http_status();
+        res.error(status,status.canonical_reason()
+            .or(Some("General Fault")).unwrap());
         res
     }
 

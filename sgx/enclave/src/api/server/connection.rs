@@ -10,9 +10,11 @@ use rustls::Session;
 use std::io;
 use std::io::{ErrorKind, Read, Write};
 use std::net::Shutdown;
+use api;
 
 use api::handler::request::process_raw_request;
-use api::results::Error;
+use api::handler::response::Response;
+use api::results::{Error, ResponseBody};
 use api::server::config::Config;
 
 pub(crate) struct Connection {
@@ -57,25 +59,54 @@ impl Connection {
 
             match process_raw_request(request_body) {
                 Ok(res) => {
-                    let body = res.body();
-
-                    if body.len() > 0 {
-                        trace!("res body: {:?}", String::from_utf8(body.clone()));
-                    }
-
-                    self.write(&body[..]);
-
-                    if res.close() {
-                        self.session.send_close_notify();
-                    }
+                    self.send_response(res);
                 }
                 Err(err) => {
-                    warn!("failed to handle request: {:?}", err);
-                    self.closing = true;
+                    self.handle_error(&err);
                     return;
                 }
             }
         }
+    }
+
+    fn send_response(&mut self, res: ResponseBody) {
+        let body = res.body();
+
+        if body.len() > 0 {
+            trace!("res body: {:?}", String::from_utf8(body.clone()));
+        }
+
+        self.write(&body[..]);
+
+        if res.close() {
+            self.session.send_close_notify();
+        }
+    }
+
+    fn handle_io_error(&mut self, err: io::Error) {
+        if let Some(err) = err.into_inner() {
+            let inner: Option<&Box<Error>> = err.as_ref().downcast_ref();
+            if inner.is_some() {
+                self.handle_error(inner.unwrap());
+            }
+        }
+    }
+
+    fn handle_error(&mut self, err: &Error) {
+        warn!("failed to handle request: {}", err);
+
+        match Response::from_error(err).encode() {
+            Ok(res) => {
+                self.send_response(res);
+            }
+            Err(err) => {
+                warn!("failed to encode response while handling error: {:?}", err)
+            }
+        }
+    }
+
+    fn read_to_end(&mut self, buf: &mut Vec<u8>) -> std::io::Result<usize> {
+        read_to_end(&mut self.session, buf, self.config.max_bytes_received())
     }
 
     pub(crate) fn ready(&mut self, poll: &mut mio::Poll, ev: &Event) {
@@ -140,8 +171,8 @@ impl Connection {
         match self.read_to_end(plaintext) {
             Err(err) => {
                 if let io::ErrorKind::ConnectionAborted = err.kind() {
-                    self.closing = true;
-                    return -1;
+                    self.handle_io_error(err);
+                    return 0;
                 }
 
                 warn!("plaintext read error: {:?}", err);
@@ -151,10 +182,6 @@ impl Connection {
                 plaintext.len() as isize
             }
         }
-    }
-
-    fn read_to_end(&mut self, buf: &mut Vec<u8>) -> std::io::Result<usize> {
-        read_to_end(&mut self.session, buf, self.config.max_bytes_received())
     }
 
     fn read_tls(&mut self) {
@@ -276,7 +303,9 @@ fn read_to_end_with_reservation<R, F>(
             return Err(std::io::Error::new(
                 ErrorKind::ConnectionAborted,
                     Box::new(
-                        Error::new("too many bytes sent".to_string()))
+                        Error::new_with_kind(
+                            "too many bytes sent".to_string(),
+                        api::results::ErrorKind::PayloadTooLarge))
             ));
         }
         if g.len == g.buf.len() {

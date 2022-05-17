@@ -23,16 +23,9 @@ pub(crate) fn process_raw_request(request_body: Vec<u8>) -> EncodedResponseResul
             let mut req = Request::new(req);
             let mut res = Response::from_request(&req);
 
-            return match route_request(&mut req, &mut res) {
-                Ok(()) => {
-                    res.encode()
-                }
-                Err(e) => {
-                    warn!("failed to dispatch request - {:?}", e);
-                    res.fault();
-                    res.encode()
-                }
-            };
+            route_request(&mut req, &mut res)?;
+
+            res.encode()
         }
         Ok(None) => {
             warn!("failed to decode request");
