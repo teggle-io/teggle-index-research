@@ -1,4 +1,5 @@
 use alloc::sync::Arc;
+use core::time::Duration;
 
 use mio::Token;
 use mio::event::Event;
@@ -13,6 +14,7 @@ use api::server::connection::Connection;
 const LISTENER: Token = Token(0);
 
 const MAX_BYTES_RECEIVED: usize = 50 * 1024; // 50 Kb
+const KEEPALIVE_DURATION: Duration = Duration::from_secs(7200); // System default for now.
 const TCP_BACKLOG: i32 = 1024;
 const MIO_EVENTS_CAPACITY: usize = 1024;
 
@@ -29,7 +31,8 @@ impl Server {
             server,
             connections: HashMap::new(),
             config: Arc::new(Config::new(
-                MAX_BYTES_RECEIVED)),
+                MAX_BYTES_RECEIVED,
+                KEEPALIVE_DURATION)),
             next_id: 2,
         }
     }

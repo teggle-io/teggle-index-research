@@ -13,6 +13,7 @@ use api::handler::codec::GLOBAL_CODEC;
 use api::handler::response::Response;
 use api::handler::router::route_request;
 use api::results::{EncodedResponseResult, Error, ErrorKind};
+use api::server::connection::{UPGRADE_OPT_KEEPALIVE};
 
 static CONN_KEEPALIVE: &str = "keep-alive";
 
@@ -36,6 +37,7 @@ pub(crate) fn process_raw_request(raw_req: RawRequest) -> EncodedResponseResult 
 pub(crate) struct RawRequest {
     request: Option<http::request::Builder>,
     data: BytesMut,
+    bytes: usize, // Total bytes read.
 }
 
 impl RawRequest {
@@ -43,7 +45,8 @@ impl RawRequest {
     pub(crate) fn new(data: Vec<u8>) -> Result<Self, Error> {
         let mut req = Self {
             request: None,
-            data: BytesMut::from(data.as_slice()),
+            bytes: data.len(),
+            data: BytesMut::from(data.as_slice())
         };
         req.try_decode()?;
 
@@ -53,10 +56,25 @@ impl RawRequest {
     #[inline]
     pub(crate) fn next(&mut self, data: Vec<u8>) -> Result<(), Error> {
         if data.len() > 0 {
+            self.bytes += data.len();
             self.push(data);
         }
 
         self.try_decode()
+    }
+
+    #[inline]
+    pub(crate) fn len(&self) -> usize {
+        self.bytes
+    }
+
+    #[inline]
+    pub fn content_length(&self) -> Option<usize> {
+        str::parse::<usize>(self.request
+            .as_ref()?
+            .headers_ref()?
+            .get(http::header::CONTENT_LENGTH)?
+            .to_str().ok()?).ok()
     }
 
     #[inline]
@@ -77,6 +95,18 @@ impl RawRequest {
     }
 
     #[inline]
+    pub fn upgrade(&self) -> u8 {
+        let mut opts = 0_u8;
+
+        if self.has_header_value(http::header::CONNECTION, CONN_KEEPALIVE) {
+            // Not sure this is really needed (I think this happens anyway).
+            opts |= UPGRADE_OPT_KEEPALIVE;
+        }
+
+        opts
+    }
+
+    #[inline]
     pub(crate) fn extract(self) -> Option<Request> {
         match self.request {
             Some(req) => {
@@ -87,6 +117,17 @@ impl RawRequest {
             }
             None => None,
         }
+    }
+
+    #[inline]
+    pub fn has_header_value<K: AsHeaderName>(&self, key: K, val: &str) -> bool {
+        if let Some(req) = self.request.as_ref() {
+            if let Some(headers) = req.headers_ref() {
+                return has_header(headers, key, val);
+            }
+        }
+
+        false
     }
 
     // private
@@ -103,15 +144,6 @@ impl RawRequest {
     #[inline]
     fn push(&mut self, body: Vec<u8>) {
         self.data.extend_from_slice(body.as_slice());
-    }
-
-    #[inline]
-    fn content_length(&self) -> Option<usize> {
-        str::parse::<usize>(self.request
-            .as_ref()?
-            .headers_ref()?
-            .get(http::header::CONTENT_LENGTH)?
-            .to_str().ok()?).ok()
     }
 }
 
@@ -159,15 +191,7 @@ impl Request {
 
     #[inline]
     pub fn has_header_value<K: AsHeaderName>(&self, key: K, val: &str) -> bool {
-        if let Some(conn) = self.headers().get(key) {
-            if let Ok(conn) = conn.to_str() {
-                if conn.eq_ignore_ascii_case(val) {
-                    return true;
-                }
-            }
-        }
-
-        false
+        has_header(self.headers(), key, val)
     }
 
     #[inline]
@@ -252,6 +276,18 @@ impl Request {
     pub fn extensions_mut(&mut self) -> &mut Extensions {
         self.req.extensions_mut()
     }
+}
+
+fn has_header<K: AsHeaderName>(headers: &HeaderMap<HeaderValue>, key: K, val: &str) -> bool {
+    if let Some(conn) = headers.get(key) {
+        if let Ok(conn) = conn.to_str() {
+            if conn.eq_ignore_ascii_case(val) {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 pub(crate) struct Context {

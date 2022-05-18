@@ -17,12 +17,15 @@ use api::handler::response::Response;
 use api::results::{Error, ResponseBody};
 use api::server::config::Config;
 
+pub(crate) static UPGRADE_OPT_KEEPALIVE: u8 = 2;
+
 pub(crate) struct Connection {
     socket: TcpStream,
     session: rustls::ServerSession,
     token: mio::Token,
     config: Arc<Config>,
     request: Option<RawRequest>,
+    upgraded: bool,
     closing: bool,
     closed: bool,
 }
@@ -39,6 +42,7 @@ impl Connection {
             token,
             config,
             request: None,
+            upgraded: false,
             closing: false,
             closed: false,
         }
@@ -49,8 +53,13 @@ impl Connection {
             return;
         }
 
+        let mut bytes_read: usize = 0;
+        if let Some(req) = self.request.as_ref() {
+            bytes_read = req.len();
+        }
+
         let mut request_body = Vec::new();
-        let r = self.read(&mut request_body);
+        let r = self.read(&mut request_body, bytes_read);
         if r == -1 {
             self.closing = true;
             return;
@@ -59,6 +68,7 @@ impl Connection {
         if request_body.len() > 0 {
             trace!("req body: {:?}", String::from_utf8(request_body.clone()));
 
+            // Consume request body.
             if let Some(req) = &mut self.request {
                 if let Err(err) = req.next(request_body) {
                     self.handle_error(&err);
@@ -77,7 +87,26 @@ impl Connection {
             }
 
             if self.request.is_some() {
-                if self.request.as_ref().unwrap().ready() {
+                let req = self.request.as_ref().unwrap();
+
+                // Check payload size.
+                if let Some(content_len) = req.content_length() {
+                    if content_len > self.config.max_bytes_received() {
+                        self.handle_error(&too_many_bytes_err(
+                            content_len,
+                            self.config.max_bytes_received()));
+                        return;
+                    }
+                }
+
+                // Upgrade connection.
+                if !self.upgraded {
+                    self.upgrade(req.upgrade());
+                    self.upgraded = true;
+                }
+
+                // Ready?
+                if req.ready() {
                     let req = self.request.take().unwrap();
                     self.request = None;
 
@@ -120,6 +149,7 @@ impl Connection {
 
     fn handle_error(&mut self, err: &Error) {
         warn!("failed to handle request: {}", err);
+        self.request = None;
 
         match Response::from_error(err).encode() {
             Ok(res) => {
@@ -131,8 +161,9 @@ impl Connection {
         }
     }
 
-    fn read_to_end(&mut self, buf: &mut Vec<u8>) -> std::io::Result<usize> {
-        read_to_end(&mut self.session, buf, self.config.max_bytes_received())
+    fn read_to_end(&mut self, buf: &mut Vec<u8>, bytes_read: usize) -> std::io::Result<usize> {
+        read_to_end(&mut self.session, buf,
+                    self.config.max_bytes_received(), bytes_read)
     }
 
     pub(crate) fn ready(&mut self, poll: &mut mio::Poll, ev: &Event) {
@@ -149,7 +180,7 @@ impl Connection {
 
         if self.closing {
             trace!("ready: CLOSE");
-            //self.session.send_close_notify();
+            self.session.send_close_notify();
             let _ = self.socket.shutdown(Shutdown::Both);
             self.closed = true;
             self.deregister(poll);
@@ -193,8 +224,8 @@ impl Connection {
         }
     }
 
-    fn read(&mut self, plaintext: &mut Vec<u8>) -> isize {
-        match self.read_to_end(plaintext) {
+    fn read(&mut self, plaintext: &mut Vec<u8>, bytes_read: usize) -> isize {
+        match self.read_to_end(plaintext, bytes_read) {
             Err(err) => {
                 if let io::ErrorKind::ConnectionAborted = err.kind() {
                     self.handle_io_error(err);
@@ -279,6 +310,39 @@ impl Connection {
     pub(crate) fn is_closed(&self) -> bool {
         self.closing
     }
+
+    pub(crate) fn upgrade(&self, opts: u8) {
+        if opts & UPGRADE_OPT_KEEPALIVE > 0 {
+            self.set_keepalive();
+        }
+    }
+
+    pub(crate) fn set_keepalive(&self) {
+        match self.socket.set_keepalive(Some(self.config.keep_alive_time())) {
+            Ok(_) => {}
+            Err(e) => {
+                warn!("failed to set keepalive during socket upgrade: {:?}", e);
+                return;
+            }
+        }
+
+        trace!("upgraded socket with keepalive: {:?}", self.config.keep_alive_time());
+    }
+}
+
+fn too_many_bytes_io_err(bytes: usize, max_bytes: usize) -> std::io::Error {
+    std::io::Error::new(
+        ErrorKind::ConnectionAborted,
+        Box::new(
+            too_many_bytes_err(bytes, max_bytes))
+    )
+}
+
+fn too_many_bytes_err(bytes: usize, max_bytes: usize) -> Error {
+    Error::new_with_kind(
+        api::results::ErrorKind::PayloadTooLarge,
+        format!("too many bytes sent ({} > {})",
+                bytes, max_bytes).to_string())
 }
 
 // Copied from std::io::Read::read_to_end to retain performance
@@ -305,15 +369,21 @@ impl Drop for Guard<'_> {
 //
 // Because we're extending the buffer with uninitialized data for trusted
 // readers, we need to make sure to truncate that if any of this panics.
-fn read_to_end<R: Read + ?Sized>(r: &mut R, buf: &mut Vec<u8>, max_bytes: usize) -> std::io::Result<usize> {
-    read_to_end_with_reservation(r, buf, |_| 32, max_bytes)
+fn read_to_end<R: Read + ?Sized>(
+    r: &mut R,
+    buf: &mut Vec<u8>,
+    max_bytes: usize,
+    bytes_read: usize
+) -> std::io::Result<usize> {
+    read_to_end_with_reservation(r, buf, |_| 32, max_bytes, bytes_read)
 }
 
 fn read_to_end_with_reservation<R, F>(
     r: &mut R,
     buf: &mut Vec<u8>,
     mut reservation_size: F,
-    max_bytes: usize
+    max_bytes: usize,
+    bytes_read: usize
 ) -> std::io::Result<usize>
     where
         R: Read + ?Sized,
@@ -323,16 +393,8 @@ fn read_to_end_with_reservation<R, F>(
     let mut g = Guard { len: buf.len(), buf };
     let ret;
     loop {
-        if g.len >= max_bytes {
-            warn!("connection aborted: too many bytes sent (limit: {})", max_bytes);
-            
-            return Err(std::io::Error::new(
-                ErrorKind::ConnectionAborted,
-                    Box::new(
-                        Error::new_with_kind(
-                            api::results::ErrorKind::PayloadTooLarge,
-                            "too many bytes sent".to_string()))
-            ));
+        if (g.len + bytes_read) >= max_bytes {
+            return Err(too_many_bytes_io_err(g.len + bytes_read, max_bytes));
         }
         if g.len == g.buf.len() {
             unsafe {

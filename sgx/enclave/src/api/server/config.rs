@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use core::time::Duration;
 
 use rustls::NoClientAuth;
 use std::io::BufReader;
@@ -40,13 +41,18 @@ fn load_private_key(filename: &str) -> rustls::PrivateKey {
 pub(crate) struct Config {
     tls_config: Arc<rustls::ServerConfig>,
     max_bytes_received: usize,
+    keep_alive_time: Duration,
 }
 
 impl Config {
-    pub(crate) fn new(max_bytes_received: usize) -> Self {
+    pub(crate) fn new(
+        max_bytes_received: usize,
+        keep_alive_time: Duration,
+    ) -> Self {
         Self {
             tls_config: make_config(),
-            max_bytes_received
+            max_bytes_received,
+            keep_alive_time
         }
     }
 
@@ -56,6 +62,10 @@ impl Config {
 
     pub(crate) fn max_bytes_received(&self) -> usize {
         self.max_bytes_received
+    }
+
+    pub(crate) fn keep_alive_time(&self) -> Duration {
+        self.keep_alive_time
     }
 }
 
