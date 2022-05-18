@@ -1,4 +1,4 @@
-use alloc::string::{String};
+use alloc::string::{String, ToString};
 use core::fmt::{Display, Formatter};
 use alloc::vec::Vec;
 use http::StatusCode;
@@ -32,6 +32,10 @@ impl ResponseBody {
 
 #[derive(Debug, Copy, Clone)]
 pub(crate) enum ErrorKind {
+    // Encode fault.
+    EncodeFault,
+    // Decode fault.
+    DecodeFault,
     // General fault.
     ServerFault,
     // Too big.
@@ -41,6 +45,8 @@ pub(crate) enum ErrorKind {
 impl Display for ErrorKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
+            ErrorKind::EncodeFault => write!(f, "EncodeFault"),
+            ErrorKind::DecodeFault => write!(f, "DecodeFault"),
             ErrorKind::ServerFault => write!(f, "ServerFault"),
             ErrorKind::PayloadTooLarge => write!(f, "PayloadTooLarge"),
         }
@@ -55,18 +61,20 @@ pub(crate) struct Error {
 
 impl Error {
     pub fn new(message: String) -> Self {
-        Self::new_with_kind(message, ErrorKind::ServerFault)
+        Self::new_with_kind(ErrorKind::ServerFault, message)
     }
 
-    pub fn new_with_kind(message: String, kind: ErrorKind) -> Self {
+    pub fn new_with_kind(kind: ErrorKind, message: String) -> Self {
         Self {
+            kind,
             message,
-            kind
         }
     }
 
     pub fn http_status(&self) -> StatusCode {
         match self.kind {
+            ErrorKind::EncodeFault => StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorKind::DecodeFault => StatusCode::INTERNAL_SERVER_ERROR,
             ErrorKind::ServerFault => StatusCode::INTERNAL_SERVER_ERROR,
             ErrorKind::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         }
@@ -75,7 +83,8 @@ impl Error {
 
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}[{}]: {}", self.kind, self.http_status(), self.message)
+        write!(f, "{}[{}]: {}",
+               self.kind, self.http_status().to_string(), self.message)
     }
 }
 

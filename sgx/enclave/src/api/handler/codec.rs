@@ -1,10 +1,12 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use bytes::BytesMut;
+use bytes::{BytesMut};
 use http::{header::HeaderValue, Request, Response};
+use http::request::Builder;
 use lazy_static::lazy_static;
-use std::{fmt, io};
+use std::{fmt};
+use api::results::{Error, ErrorKind};
 
 lazy_static! {
     pub(crate) static ref GLOBAL_CODEC: HttpCodec = {
@@ -23,7 +25,7 @@ impl HttpCodec {
         Self { server: server.to_string() }
     }
 
-    pub(crate) fn encode(&self, item: Response<Vec<u8>>, dst: &mut BytesMut) -> io::Result<()> {
+    pub(crate) fn encode(&self, item: Response<Vec<u8>>, dst: &mut BytesMut) -> Result<(), Error> {
         use std::fmt::Write;
 
         write!(
@@ -39,8 +41,9 @@ impl HttpCodec {
             self.server,
             item.body().len(),
             "TODO"
-        )
-            .unwrap();
+        ).map_err(|e| {
+            Error::new_with_kind(ErrorKind::EncodeFault, e.to_string())
+        })?;
 
         //date::now()
 
@@ -54,10 +57,10 @@ impl HttpCodec {
         dst.extend_from_slice(b"\r\n");
         dst.extend_from_slice(item.body().as_slice());
 
-        return Ok(());
+        Ok(())
     }
 
-    pub(crate) fn decode(&self, src: &mut BytesMut) -> io::Result<Option<Request<Vec<u8>>>> {
+    pub(crate) fn decode(&self, src: &mut BytesMut) -> Result<Option<Builder>, Error> {
         // TODO: we should grow this headers array if parsing fails and asks
         //       for more headers
         let mut headers = [None; 16];
@@ -66,7 +69,7 @@ impl HttpCodec {
             let mut r = httparse::Request::new(&mut parsed_headers);
             let status = r.parse(src).map_err(|e| {
                 let msg = format!("failed to parse http request: {:?}", e);
-                io::Error::new(io::ErrorKind::Other, msg)
+                return Error::new_with_kind(ErrorKind::DecodeFault, msg);
             })?;
 
             let amt = match status {
@@ -105,9 +108,9 @@ impl HttpCodec {
             0 => { ret = ret.version(http::Version::HTTP_10); },
             1 => { ret = ret.version(http::Version::HTTP_11); },
             _ => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "only HTTP/1.0 or 1.1 accepted",
+                return Err(Error::new_with_kind(
+                    ErrorKind::DecodeFault,
+                    "only HTTP/1.0 or 1.1 accepted".to_string(),
                 ));
             }
         }
@@ -118,18 +121,12 @@ impl HttpCodec {
                 None => break,
             };
             let value = HeaderValue::from_bytes(data.slice(v.0..v.1).as_ref())
-                .map_err(|_| io::Error::new(io::ErrorKind::Other, "header decode error"))?;
+                .map_err(|_| Error::new_with_kind(ErrorKind::DecodeFault,
+                                                  "header decode error".to_string()))?;
             ret = ret.header(&data[k.0..k.1], value);
         }
 
-        // TODO: GET BODY
-        let body: Vec<u8> = Vec::new();
-
-        let req = ret
-            .body(body)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-
-        Ok(Some(req))
+        Ok(Some(ret))
     }
 }
 

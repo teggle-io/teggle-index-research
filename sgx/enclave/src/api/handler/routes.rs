@@ -30,8 +30,8 @@ fn build_routes() -> Router {
             panic!("YELP");
         });
 
-        r.post("/post", |req, res| {
-            println!("Received: {:?}", req.body());
+        r.post("/post", |_req, res| {
+            //println!("Received: {:?}", req.body());
 
             res.ok("Ok");
             Ok(())

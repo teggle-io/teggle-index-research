@@ -12,7 +12,7 @@ use std::io::{ErrorKind, Read, Write};
 use std::net::Shutdown;
 use api;
 
-use api::handler::request::process_raw_request;
+use api::handler::request::{process_raw_request, RawRequest};
 use api::handler::response::Response;
 use api::results::{Error, ResponseBody};
 use api::server::config::Config;
@@ -22,6 +22,7 @@ pub(crate) struct Connection {
     session: rustls::ServerSession,
     token: mio::Token,
     config: Arc<Config>,
+    request: Option<RawRequest>,
     closing: bool,
     closed: bool,
 }
@@ -37,6 +38,7 @@ impl Connection {
             session,
             token,
             config,
+            request: None,
             closing: false,
             closed: false,
         }
@@ -57,13 +59,37 @@ impl Connection {
         if request_body.len() > 0 {
             trace!("req body: {:?}", String::from_utf8(request_body.clone()));
 
-            match process_raw_request(request_body) {
-                Ok(res) => {
-                    self.send_response(res);
-                }
-                Err(err) => {
+            if let Some(req) = &mut self.request {
+                if let Err(err) = req.next(request_body) {
                     self.handle_error(&err);
                     return;
+                }
+            } else {
+                match RawRequest::new(request_body) {
+                    Ok(req) => {
+                        self.request = Some(req);
+                    }
+                    Err(err) => {
+                        self.handle_error(&err);
+                        return;
+                    }
+                }
+            }
+
+            if self.request.is_some() {
+                if self.request.as_ref().unwrap().ready() {
+                    let req = self.request.take().unwrap();
+                    self.request = None;
+
+                    match process_raw_request(req) {
+                        Ok(res) => {
+                            self.send_response(res);
+                        }
+                        Err(err) => {
+                            self.handle_error(&err);
+                            return;
+                        }
+                    }
                 }
             }
         }
@@ -304,8 +330,8 @@ fn read_to_end_with_reservation<R, F>(
                 ErrorKind::ConnectionAborted,
                     Box::new(
                         Error::new_with_kind(
-                            "too many bytes sent".to_string(),
-                        api::results::ErrorKind::PayloadTooLarge))
+                            api::results::ErrorKind::PayloadTooLarge,
+                            "too many bytes sent".to_string()))
             ));
         }
         if g.len == g.buf.len() {

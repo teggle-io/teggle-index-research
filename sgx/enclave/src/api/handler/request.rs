@@ -5,20 +5,19 @@ use core::str::FromStr;
 use bytes::BytesMut;
 use http::{Extensions, HeaderMap, HeaderValue, Method, Uri, Version};
 use http::header::AsHeaderName;
-use http::request::Parts;
 use log::warn;
 use std::collections::HashMap;
 
 use api::handler::codec::GLOBAL_CODEC;
 use api::handler::response::Response;
 use api::handler::router::route_request;
-use api::results::EncodedResponseResult;
+use api::results::{EncodedResponseResult, Error};
 
 static CONN_KEEPALIVE: &str = "keep-alive";
 
-pub(crate) fn process_raw_request(request_body: Vec<u8>) -> EncodedResponseResult {
-    return match GLOBAL_CODEC.decode(&mut BytesMut::from(request_body.as_slice())) {
-        Ok(Some(req)) => {
+pub(crate) fn process_raw_request(req: RawRequest) -> EncodedResponseResult {
+    match req.request() {
+        Some(req) => {
             // Wrap request in handler::Request
             let mut req = Request::new(req);
             let mut res = Response::from_request(&req);
@@ -27,25 +26,99 @@ pub(crate) fn process_raw_request(request_body: Vec<u8>) -> EncodedResponseResul
 
             res.encode()
         }
-        Ok(None) => {
-            warn!("failed to decode request");
+        None => {
+            warn!("failed to expand raw request from builder");
             Response::encode_fault()
         }
-        Err(e) => {
-            warn!("failed to decode request - {:?}", e);
-            Response::encode_fault()
+    }
+}
+
+pub(crate) struct RawRequest {
+    request: Option<http::request::Builder>,
+    data: BytesMut,
+}
+
+impl RawRequest {
+    #[inline]
+    pub(crate) fn new(data: Vec<u8>) -> Result<Self, Error> {
+        let mut req = Self {
+            request: None,
+            data: BytesMut::from(data.as_slice()),
+        };
+        req.try_decode()?;
+
+        Ok(req)
+    }
+
+    #[inline]
+    pub(crate) fn next(&mut self, data: Vec<u8>) -> Result<(), Error> {
+        self.push(data);
+        self.try_decode()
+    }
+
+    #[inline]
+    pub(crate) fn ready(&self) -> bool {
+        if self.request.is_none() {
+            return false;
         }
-    };
+
+        if let Some(content_length) = self.content_length() {
+            if content_length > 0 {
+                if self.data.len() < content_length {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    #[inline]
+    pub(crate) fn request(self) -> Option<http::Request<()>> {
+        match self.request {
+            Some(req) => {
+                req.body(()).ok()
+            }
+            None => None,
+        }
+    }
+
+    // private
+
+    #[inline]
+    fn try_decode(&mut self) -> Result<(), Error> {
+        if self.request.is_none() {
+            self.request = GLOBAL_CODEC.decode(&mut self.data)?;
+        }
+
+        Ok(())
+    }
+
+    #[inline]
+    fn push(&mut self, body: Vec<u8>) {
+        self.data.extend_from_slice(body.as_slice());
+    }
+
+    #[inline]
+    fn content_length(&self) -> Option<usize> {
+        let content_length = self.request
+            .as_ref()?
+            .headers_ref()?
+            .get(http::header::CONTENT_LENGTH)?
+            .to_str().ok()?;
+
+        str::parse::<usize>(content_length).ok()
+    }
 }
 
 pub(crate) struct Request {
-    req: http::Request<Vec<u8>>,
+    req: http::Request<()>,
     path_vars: Option<HashMap<String, String>>,
 }
 
 impl Request {
     #[inline]
-    pub(crate) fn new(req: http::Request<Vec<u8>>) -> Self {
+    pub(crate) fn new(req: http::Request<()>) -> Self {
         Self { req, path_vars: None }
     }
 
@@ -145,29 +218,5 @@ impl Request {
     #[inline]
     pub fn extensions_mut(&mut self) -> &mut Extensions {
         self.req.extensions_mut()
-    }
-
-    #[allow(dead_code)]
-    #[inline]
-    pub fn body(&self) -> &Vec<u8> {
-        self.req.body()
-    }
-
-    #[allow(dead_code)]
-    #[inline]
-    pub fn body_mut(&mut self) -> &mut Vec<u8> {
-        self.req.body_mut()
-    }
-
-    #[allow(dead_code)]
-    #[inline]
-    pub fn into_body(self) -> Vec<u8> {
-        self.req.into_body()
-    }
-
-    #[allow(dead_code)]
-    #[inline]
-    pub fn into_parts(self) -> (Parts, Vec<u8>) {
-        self.req.into_parts()
     }
 }
