@@ -1,4 +1,3 @@
-use alloc::string::String;
 use alloc::sync::Arc;
 use core::time::Duration;
 
@@ -8,7 +7,6 @@ use mio::net::TcpListener;
 use net2::TcpBuilder;
 use net2::unix::UnixTcpBuilderExt;
 use std::collections::HashMap;
-use std::thread;
 
 use api::server::config::Config;
 use api::server::connection::Connection;
@@ -86,54 +84,39 @@ impl Server {
     }
 }
 
-pub(crate) fn start_api_server(addr: String, thread_count: u8) {
-    let mut children = vec![];
+pub(crate) fn start_api_server(addr: &str) {
+    let listener = TcpListener::from_std(
+        TcpBuilder::new_v4().unwrap()
+            .reuse_address(true).unwrap()
+            .reuse_port(true).unwrap()
+            .bind(&addr).unwrap()
+            .listen(TCP_BACKLOG).unwrap()).unwrap();
 
-    for _ in 0..thread_count {
-        let addr = addr.clone();
+    let mut poll = mio::Poll::new().unwrap();
+    poll.register(&listener,
+                  LISTENER,
+                  mio::Ready::readable(),
+                  mio::PollOpt::level()).unwrap();
 
-        children.push(thread::spawn(move || {
-            info!("🚀 Starting API server ({}) [{:?}]", &addr, thread::current().id());
+    let mut server = Server::new(listener);
+    let mut events = mio::Events::with_capacity(
+        MIO_EVENTS_CAPACITY);
 
-            let listener = TcpListener::from_std(
-                TcpBuilder::new_v4().unwrap()
-                    .reuse_address(true).unwrap()
-                    .reuse_port(true).unwrap()
-                    .bind(&addr).unwrap()
-                    .listen(TCP_BACKLOG).unwrap()).unwrap();
+    'outer: loop {
+        poll.poll(&mut events, None)
+            .unwrap();
 
-            let mut poll = mio::Poll::new().unwrap();
-            poll.register(&listener,
-                          LISTENER,
-                          mio::Ready::readable(),
-                          mio::PollOpt::level()).unwrap();
-
-            let mut server = Server::new(listener);
-            let mut events = mio::Events::with_capacity(
-                MIO_EVENTS_CAPACITY);
-
-            'outer: loop {
-                poll.poll(&mut events, None)
-                    .unwrap();
-
-                for event in events.iter() {
-                    match event.token() {
-                        LISTENER => {
-                            if !server.accept(&mut poll) {
-                                break 'outer;
-                            }
-                        }
-                        _ => {
-                            server.conn_event(&mut poll, &event)
-                        }
+        for event in events.iter() {
+            match event.token() {
+                LISTENER => {
+                    if !server.accept(&mut poll) {
+                        break 'outer;
                     }
                 }
+                _ => {
+                    server.conn_event(&mut poll, &event)
+                }
             }
-        }));
-    }
-
-    for child in children {
-        // Wait for the thread to finish. Returns a result.
-        let _ = child.join();
+        }
     }
 }

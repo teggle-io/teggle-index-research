@@ -71,7 +71,7 @@ fn init_enclave(enclave_file: &str) -> SgxResult<SgxEnclave> {
 static ENCLAVE_FILE: &'static str = "enclave.signed.so";
 
 const ENCLAVE_LOCK_TIMEOUT: u64 = 6 * 5;
-const TCS_NUM: u8 = 8;
+const TCS_NUM: u8 = 12;
 
 lazy_static! {
     pub static ref ENCLAVE_DOORBELL: EnclaveDoorbell = EnclaveDoorbell::new(

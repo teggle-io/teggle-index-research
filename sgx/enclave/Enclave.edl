@@ -43,7 +43,7 @@ enclave {
 
         public sgx_status_t ecall_perform_test();
 
-        public void ecall_api_server_start([in, string]char* addr, uint8_t thread_count);
+        public void ecall_api_server_start([in, string]char* addr);
     };
 
     untrusted {
