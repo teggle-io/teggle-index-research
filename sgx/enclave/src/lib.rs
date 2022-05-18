@@ -43,7 +43,6 @@ extern crate uuid;
 extern crate webpki;
 extern crate rustls;
 extern crate mio;
-extern crate mio_extras;
 extern crate net2;
 extern crate http;
 extern crate httparse;

@@ -126,7 +126,7 @@ impl EnclaveDoorbell {
             // eprintln!("Increasing available tasks");
             *count -= reserve;
         }
-        Some(EnclaveAccessToken::new(self, recursive))
+        Some(EnclaveAccessToken::new(self, recursive, reserve))
     }
 
     pub fn get_access(&'static self, recursive: bool) -> Option<EnclaveAccessToken> {
@@ -149,15 +149,17 @@ pub struct EnclaveAccessToken {
     doorbell: &'static EnclaveDoorbell,
     enclave: SgxResult<&'static SgxEnclave>,
     recursive: bool,
+    reserve: u8,
 }
 
 impl EnclaveAccessToken {
-    fn new(doorbell: &'static EnclaveDoorbell, recursive: bool) -> Self {
+    fn new(doorbell: &'static EnclaveDoorbell, recursive: bool, reserve: u8) -> Self {
         let enclave = doorbell.enclave.as_ref().map_err(|status| *status);
         Self {
             doorbell,
             enclave,
             recursive,
+            reserve
         }
     }
 }
@@ -180,7 +182,7 @@ impl Drop for EnclaveAccessToken {
             //     TCS_NUM - *count,
             //     TCS_NUM
             // );
-            *count += 1;
+            *count += self.reserve;
             drop(count);
             self.doorbell.condvar.notify_one();
         }
