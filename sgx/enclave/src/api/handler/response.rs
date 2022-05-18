@@ -45,14 +45,14 @@ impl Response {
         let mut res = Self::new();
         let status = err.http_status();
         res.error(status,status.canonical_reason()
-            .or(Some("General Fault")).unwrap());
+            .or(Some("General Fault")).unwrap()).unwrap();
         res
     }
 
     #[inline]
     pub(crate) fn encode_fault() -> EncodedResponseResult {
         let mut res = Self::new();
-        res.fault();
+        res.fault()?;
         res.encode()
     }
 
@@ -110,19 +110,21 @@ impl Response {
         }
     }
 
-    pub fn ok(&mut self, msg: &str) -> &mut Self {
+    pub fn ok(&mut self, msg: &str) -> Result<(), Error> {
         self.json(&Msg { message: msg.to_string() }).unwrap();
         self.status(StatusCode::OK);
-        self
+
+        Ok(())
     }
 
-    pub fn error(&mut self, status: StatusCode, msg: &str) -> &mut Self {
+    pub fn error(&mut self, status: StatusCode, msg: &str) -> Result<(), Error> {
         self.json(&ErrorMsg { status: u16::from(status), message: msg.to_string() }).unwrap();
         self.status(status);
-        self
+
+        Ok(())
     }
 
-    pub fn fault(&mut self) -> &mut Self {
+    pub fn fault(&mut self) -> Result<(), Error> {
         self.error(StatusCode::INTERNAL_SERVER_ERROR,
                    "Server Fault")
     }

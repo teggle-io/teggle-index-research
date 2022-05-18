@@ -10,52 +10,61 @@ lazy_static! {
     pub(crate) static ref ROUTER: Arc<Router> = Arc::new(build_routes());
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct TestPayload {
+    pub name: String,
+    pub email: String,
+}
+
 fn build_routes() -> Router {
     let mut r = Router::new();
 
     r.require(middleware_recovery);
 
     r.route("/test", |mut r| {
-        r.require(|req, res, next| {
+        r.require(|req, res, ctx, next| {
             info!("inside test");
-            next(req, res)
+            ctx.insert("test", "value");
+
+            next(req, res, ctx)
         });
 
-        r.get("/ping", |_req, res| {
-            res.ok("PONG");
-            Ok(())
+        r.get("/ping", |_req, res, _ctx| {
+            res.ok("PONG")
         });
 
-        r.get("/panic", |_req, _res| {
+        r.get("/panic", |_req, _res, _ctx| {
             panic!("YELP");
         });
 
-        r.post("/post", |_req, res| {
-            //println!("Received: {:?}", req.body());
+        r.post("/post", |req, res, ctx| {
+            let content_type: Option<String> = req.header(http::header::CONTENT_TYPE);
+            let test_val: Option<String> = ctx.get("test");
+            let payload: TestPayload = req.json()?;
 
-            res.ok("Ok");
-            Ok(())
+            error!("Content-Type: {:?}", content_type);
+            error!("test value: {:?}", test_val);
+            error!("Payload: {:?}", payload);
+
+            res.ok("Ok")
         });
     });
 
-    r.get("/ping", |_req, res| {
-        res.ok("PONG");
-        Ok(())
+    r.get("/ping", |_req, res, _ctx| {
+        res.ok("PONG")
     });
 
-    r.get("/hello/:name", |req, res| {
-        let name: Option<String> = req.path_var("name");
-        res.ok(format!("Hello {}", name.unwrap()).as_str());
+    r.get("/hello/:name", |req, res, _ctx| {
+        let name: Option<String> = req.var("name");
 
-        Ok(())
+        res.ok(format!("Hello {}", name.unwrap()).as_str())
     });
 
-    r.get("/calc/:a/:b", |req, res| {
-        let a: Option<u32> = req.path_var("a");
-        let b: Option<u32> = req.path_var("b");
-        res.ok(format!("Sum {}", a.unwrap() + b.unwrap()).as_str());
+    r.get("/calc/:a/:b", |req, res, _ctx| {
+        let a: Option<u32> = req.var("a");
+        let b: Option<u32> = req.var("b");
 
-        Ok(())
+        res.ok(format!("Sum {}", a.unwrap() + b.unwrap()).as_str())
     });
 
     r

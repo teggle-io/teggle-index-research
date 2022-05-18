@@ -7,30 +7,28 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::SgxRwLock;
 
-use api::handler::request::Request;
+use api::handler::request::{Context, Request};
 use api::handler::response::Response;
 use api::handler::routes::ROUTER;
 use api::results::Error;
 
 const CAPTURE_PLACEHOLDER: &'static str = "*CAPTURE*";
 
-pub(crate) type Handler = Arc<dyn Send + Sync + Fn(&Request, &mut Response) -> Result<(), Error>>;
-pub(crate) type HandlerFn = fn(&Request, &mut Response) -> Result<(), Error>;
-pub(crate) type Middleware = Arc<dyn Send + Sync + Fn(&Request, &mut Response, Handler) -> Result<(), Error>>;
-pub(crate) type MiddlewareFn = fn(&Request, &mut Response, Handler) -> Result<(), Error>;
+pub(crate) type Handler = Arc<dyn Send + Sync + Fn(&Request, &mut Response, &mut Context) -> Result<(), Error>>;
+pub(crate) type HandlerFn = fn(&Request, &mut Response, &mut Context) -> Result<(), Error>;
+pub(crate) type Middleware = Arc<dyn Send + Sync + Fn(&Request, &mut Response, &mut Context, Handler) -> Result<(), Error>>;
+pub(crate) type MiddlewareFn = fn(&Request, &mut Response, &mut Context, Handler) -> Result<(), Error>;
 
 #[inline]
-pub(crate) fn route_request(req: &mut Request, res: &mut Response) -> Result<(), Error> {
+pub(crate) fn route_request(req: &mut Request, res: &mut Response, ctx: &mut Context) -> Result<(), Error> {
     match ROUTER.clone().find(req.method(), req.uri().path()) {
         Some((handler, captures)) => {
-            req.path_vars(captures);
+            req.vars(captures);
 
-            handler.route(req, res)
+            handler.route(req, res, ctx)
         }
         None => {
-            res.error(StatusCode::NOT_FOUND, "Not Found");
-
-            Ok(())
+            res.error(StatusCode::NOT_FOUND, "Not Found")
         }
     }
 }
@@ -304,9 +302,9 @@ impl RouteHandler {
         // Finalize middleware
         let cb_handler = handler.clone();
         let mut middleware: Vec<Middleware> = middleware.clone();
-        middleware.push(Arc::new(move |req, res, _next| {
+        middleware.push(Arc::new(move |req, res, ctx, _next| {
             // Last middleware to call handler, do not call next.
-            cb_handler(req, res)
+            cb_handler(req, res, ctx)
         }));
 
         Self {
@@ -318,24 +316,25 @@ impl RouteHandler {
         }
     }
 
-    fn route(&self, req: &mut Request, res: &mut Response) -> Result<(), Error> {
+    fn route(&self, req: &mut Request, res: &mut Response, ctx: &mut Context) -> Result<(), Error> {
         let middleware: Vec<Middleware> = self.middleware.clone();
-        _route_step(req, res, Arc::new(middleware), 0)
+        _route_step(req, res, ctx, Arc::new(middleware), 0)
     }
 }
 
 fn _route_step(
     req: &Request,
     res: &mut Response,
+    ctx: &mut Context,
     middleware: Arc<Vec<Middleware>>,
     level: usize
 ) -> Result<(), Error> {
     let cur = middleware.get(level).unwrap();
     let last = level + 1 >= middleware.len();
     let middleware = middleware.clone();
-    return cur(req, res, Arc::new(move |req, res| {
+    return cur(req, res, ctx, Arc::new(move |req, res, ctx| {
         if last { return Ok(()); }
-        _route_step(req, res, middleware.clone(), level + 1)
+        _route_step(req, res, ctx, middleware.clone(), level + 1)
     }));
 }
 
