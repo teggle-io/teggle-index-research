@@ -24,6 +24,7 @@ enclave {
     from "sgx_pipe.edl" import *;
     from "sgx_env.edl" import *;
     from "sgx_time.edl" import *;
+    from "sgx_thread.edl" import *;
     from "sgx_tstdc.edl" import *;
     from "sgx_tprotected_fs.edl" import *;
 
@@ -42,7 +43,7 @@ enclave {
 
         public sgx_status_t ecall_perform_test();
 
-        public void ecall_api_server_start([in, string]char* addr);
+        public void ecall_api_server_start([in, string]char* addr, uint8_t thread_count);
     };
 
     untrusted {

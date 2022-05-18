@@ -34,6 +34,7 @@ bytes = { git = "https://github.com/mesalock-linux/bytes-sgx.git" }
 http = { git = "https://github.com/teggle-io/http-sgx.git" }
 httparse = { version = "1.7.1", default-features = false }
 mio = { git = "https://github.com/mesalock-linux/mio-sgx.git", branch = "v0.6_sgx_1.1.3" }
+mio-extras = { git = "https://github.com/teggle-io/mio-extras-sgx.git" }
 net2 = { git = "https://github.com/mesalock-linux/net2-rs-sgx.git" }
 
 [target.'cfg(not(target_env = "sgx"))'.dependencies]

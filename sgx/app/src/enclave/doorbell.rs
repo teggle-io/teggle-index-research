@@ -105,7 +105,7 @@ impl EnclaveDoorbell {
         }
     }
 
-    fn wait_for(&'static self, duration: Duration, recursive: bool) -> Option<EnclaveAccessToken> {
+    fn wait_for(&'static self, duration: Duration, recursive: bool, reserve: u8) -> Option<EnclaveAccessToken> {
         // eprintln!("Query Token creation. recursive: {}", recursive);
         if !recursive {
             let mut count = self.count.lock();
@@ -124,13 +124,17 @@ impl EnclaveDoorbell {
                 }
             }
             // eprintln!("Increasing available tasks");
-            *count -= 1;
+            *count -= reserve;
         }
         Some(EnclaveAccessToken::new(self, recursive))
     }
 
     pub fn get_access(&'static self, recursive: bool) -> Option<EnclaveAccessToken> {
-        self.wait_for(Duration::from_secs(ENCLAVE_LOCK_TIMEOUT), recursive)
+        self.get_access_for(recursive, 1)
+    }
+
+    pub fn get_access_for(&'static self, recursive: bool, reserve: u8) -> Option<EnclaveAccessToken> {
+        self.wait_for(Duration::from_secs(ENCLAVE_LOCK_TIMEOUT), recursive, reserve)
     }
 
     pub fn capacity(&'static self) -> u8 {

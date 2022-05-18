@@ -37,10 +37,8 @@ impl Connection {
                       config: Arc<Config>)
            -> Self {
         Self {
-            socket,
-            session,
-            token,
-            config,
+            socket, session,
+            token, config,
             request: None,
             upgraded: false,
             closing: false,
@@ -101,7 +99,7 @@ impl Connection {
 
                 // Upgrade connection.
                 if !self.upgraded {
-                    self.upgrade(req.upgrade());
+                    self.upgrade(req.upgrade_opts());
                     self.upgraded = true;
                 }
 

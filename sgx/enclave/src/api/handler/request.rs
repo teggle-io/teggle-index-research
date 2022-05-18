@@ -95,7 +95,7 @@ impl RawRequest {
     }
 
     #[inline]
-    pub fn upgrade(&self) -> u8 {
+    pub fn upgrade_opts(&self) -> u8 {
         let mut opts = 0_u8;
 
         if self.has_header_value(http::header::CONNECTION, CONN_KEEPALIVE) {
