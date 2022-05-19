@@ -1,6 +1,8 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::ops::Add;
 use core::str::FromStr;
+use core::time::Duration;
 
 use bytes::BytesMut;
 use http::{Extensions, HeaderMap, HeaderValue, Method, Uri, Version};
@@ -8,6 +10,7 @@ use http::header::AsHeaderName;
 use log::warn;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
+use std::time::Instant;
 
 use api::handler::codec::GLOBAL_CODEC;
 use api::handler::response::Response;
@@ -38,6 +41,7 @@ pub(crate) struct RawRequest {
     request: Option<http::request::Builder>,
     data: BytesMut,
     bytes: usize, // Total bytes read.
+    timeout: Option<Instant>,
 }
 
 impl RawRequest {
@@ -46,7 +50,9 @@ impl RawRequest {
         let mut req = Self {
             request: None,
             bytes: data.len(),
-            data: BytesMut::from(data.as_slice())
+            data: BytesMut::from(data.as_slice()),
+            timeout: Some(Instant::now() // Timeout for establishing the request.
+                .add(Duration::from_secs(10)))
         };
         req.try_decode()?;
 
@@ -117,6 +123,17 @@ impl RawRequest {
             }
             None => None,
         }
+    }
+
+    #[inline]
+    pub fn check_timeout(&self, now: &Instant) -> bool {
+        if let Some(timeout) = self.timeout.as_ref() {
+            if now.gt(timeout) {
+                return true;
+            }
+        }
+
+        false
     }
 
     #[inline]

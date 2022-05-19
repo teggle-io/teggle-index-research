@@ -10,6 +10,7 @@ use rustls::Session;
 use std::io;
 use std::io::{ErrorKind, Read, Write};
 use std::net::Shutdown;
+use std::time::Instant;
 use api;
 
 use api::handler::request::{process_raw_request, RawRequest};
@@ -178,14 +179,18 @@ impl Connection {
 
         if self.closing {
             trace!("ready: CLOSE");
-            self.session.send_close_notify();
-            let _ = self.socket.shutdown(Shutdown::Both);
-            self.closed = true;
-            self.deregister(poll);
+            self.close(poll);
         } else {
             trace!("ready: CONTINUE");
             self.reregister(poll);
         }
+    }
+
+    fn close(&mut self, poll: &mut mio::Poll) {
+        self.session.send_close_notify();
+        let _ = self.socket.shutdown(Shutdown::Both);
+        self.closed = true;
+        self.deregister(poll);
     }
 
     pub(crate) fn register(&self, poll: &mut mio::Poll) {
@@ -325,6 +330,21 @@ impl Connection {
         }
 
         trace!("upgraded socket with keepalive: {:?}", self.config.keep_alive_time());
+    }
+
+    pub fn check_timeout(&mut self, poll: &mut mio::Poll, now: &Instant) {
+        if let Some(req) = self.request.as_ref() {
+            if req.check_timeout(now) {
+                self.handle_error(
+                    &Error::new_with_kind(
+                        api::results::ErrorKind::TimedOut,
+                        "request timed out".to_string()
+                    )
+                );
+                self.write_tls_and_handle_error();
+                self.close(poll);
+            }
+        }
     }
 }
 

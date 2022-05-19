@@ -1,28 +1,34 @@
 use alloc::sync::Arc;
 use core::time::Duration;
 
-use mio::Token;
 use mio::event::Event;
 use mio::net::TcpListener;
+use mio::Token;
 use net2::TcpBuilder;
 use net2::unix::UnixTcpBuilderExt;
 use std::collections::HashMap;
+use std::time::Instant;
 
 use api::server::config::Config;
 use api::server::connection::Connection;
 
 const LISTENER: Token = Token(0);
 
-const MAX_BYTES_RECEIVED: usize = 50 * 1024; // 50 Kb
-const KEEPALIVE_DURATION: Duration = Duration::from_secs(7200); // System default for now.
+const MAX_BYTES_RECEIVED: usize = 50 * 1024;
+// 50 Kb
+const KEEPALIVE_DURATION: Duration = Duration::from_secs(7200);
+// System default for now.
 const TCP_BACKLOG: i32 = 1024;
+
 const MIO_EVENTS_CAPACITY: usize = 1024;
+const MIO_TIMEOUT_POLL: Duration = Duration::from_millis(1000);
 
 struct Server {
     server: TcpListener,
     connections: HashMap<Token, Connection>,
     config: Arc<Config>,
     next_id: usize,
+    last_timeout: Instant,
 }
 
 impl Server {
@@ -34,6 +40,7 @@ impl Server {
                 MAX_BYTES_RECEIVED,
                 KEEPALIVE_DURATION)),
             next_id: 2,
+            last_timeout: Instant::now(),
         }
     }
 
@@ -66,6 +73,20 @@ impl Server {
                 false
             }
         }
+    }
+
+    pub fn check_timeouts(&mut self, poll: &mut mio::Poll) -> bool {
+        let now = Instant::now();
+        if now.saturating_duration_since(self.last_timeout).lt(&MIO_TIMEOUT_POLL) {
+            return false;
+        }
+
+        for (_, conn) in self.connections.iter_mut() {
+            conn.check_timeout(poll, &now);
+        }
+
+        self.last_timeout = now;
+        true
     }
 
     fn conn_event(&mut self, poll: &mut mio::Poll, event: &Event) {
@@ -103,14 +124,17 @@ pub(crate) fn start_api_server(addr: &str) {
         MIO_EVENTS_CAPACITY);
 
     'outer: loop {
-        poll.poll(&mut events, None)
+        poll.poll(&mut events, Some(MIO_TIMEOUT_POLL))
             .unwrap();
+        if server.check_timeouts(&mut poll) {
+            continue 'outer;
+        }
 
         for event in events.iter() {
             match event.token() {
                 LISTENER => {
                     if !server.accept(&mut poll) {
-                        break 'outer;
+                        continue 'outer;
                     }
                 }
                 _ => {

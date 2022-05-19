@@ -38,6 +38,8 @@ pub(crate) enum ErrorKind {
     DecodeFault,
     // General fault.
     ServerFault,
+    // Timed out.
+    TimedOut,
     // Too big.
     PayloadTooLarge,
 }
@@ -48,6 +50,7 @@ impl Display for ErrorKind {
             ErrorKind::EncodeFault => write!(f, "EncodeFault"),
             ErrorKind::DecodeFault => write!(f, "DecodeFault"),
             ErrorKind::ServerFault => write!(f, "ServerFault"),
+            ErrorKind::TimedOut => write!(f, "TimedOut"),
             ErrorKind::PayloadTooLarge => write!(f, "PayloadTooLarge"),
         }
     }
@@ -76,6 +79,7 @@ impl Error {
             ErrorKind::EncodeFault => StatusCode::INTERNAL_SERVER_ERROR,
             ErrorKind::DecodeFault => StatusCode::INTERNAL_SERVER_ERROR,
             ErrorKind::ServerFault => StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorKind::TimedOut => StatusCode::REQUEST_TIMEOUT,
             ErrorKind::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         }
     }
