@@ -3,8 +3,8 @@ use alloc::sync::Arc;
 
 use lazy_static::lazy_static;
 
-use api::handler::router::Router;
-use api::middleware::recovery::middleware_recovery;
+use crate::api::handler::router::Router;
+use crate::api::middleware::recovery::middleware_recovery;
 
 lazy_static! {
     pub(crate) static ref ROUTER: Arc<Router> = Arc::new(build_routes());

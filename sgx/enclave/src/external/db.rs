@@ -3,9 +3,9 @@ use alloc::string::ToString;
 use std::string::String;
 use std::vec::Vec;
 
-use enclave_ffi_types::{EnclaveBuffer, OcallReturn};
-use external::ecall::allocate::recover_buffer;
-use external::ocall::db::{ocall_db_flush, ocall_db_get, ocall_db_get_fixed, ocall_db_put};
+use crate::enclave_ffi_types::{EnclaveBuffer, OcallReturn};
+use crate::external::ecall::allocate::recover_buffer;
+use crate::external::ocall::db::{ocall_db_flush, ocall_db_get, ocall_db_get_fixed, ocall_db_put};
 
 #[allow(dead_code)]
 fn db_put(key: &[u8], value: &[u8]) -> Result<(), String> {

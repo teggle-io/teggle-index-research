@@ -8,15 +8,14 @@ use mio::event::Event;
 use mio::net::TcpStream;
 use rustls::Session;
 use std::io;
-use std::io::{ErrorKind, Read, Write};
+use std::io::{ErrorKind as StdErrorKind, Read, Write};
 use std::net::Shutdown;
 use std::time::Instant;
-use api;
 
-use api::handler::request::{process_raw_request, RawRequest};
-use api::handler::response::Response;
-use api::results::{Error, ResponseBody};
-use api::server::config::Config;
+use crate::api::handler::request::{process_raw_request, RawRequest};
+use crate::api::handler::response::Response;
+use crate::api::results::{Error, ErrorKind, ResponseBody};
+use crate::api::server::config::Config;
 
 pub(crate) static UPGRADE_OPT_KEEPALIVE: u8 = 2;
 
@@ -337,7 +336,7 @@ impl Connection {
             if req.check_timeout(now) {
                 self.handle_error(
                     &Error::new_with_kind(
-                        api::results::ErrorKind::TimedOut,
+                        ErrorKind::TimedOut,
                         "request timed out".to_string()
                     )
                 );
@@ -350,7 +349,7 @@ impl Connection {
 
 fn too_many_bytes_io_err(bytes: usize, max_bytes: usize) -> std::io::Error {
     std::io::Error::new(
-        ErrorKind::ConnectionAborted,
+        StdErrorKind::ConnectionAborted,
         Box::new(
             too_many_bytes_err(bytes, max_bytes))
     )
@@ -358,7 +357,7 @@ fn too_many_bytes_io_err(bytes: usize, max_bytes: usize) -> std::io::Error {
 
 fn too_many_bytes_err(bytes: usize, max_bytes: usize) -> Error {
     Error::new_with_kind(
-        api::results::ErrorKind::PayloadTooLarge,
+        ErrorKind::PayloadTooLarge,
         format!("too many bytes sent ({} > {})",
                 bytes, max_bytes).to_string())
 }
@@ -437,7 +436,7 @@ fn read_to_end_with_reservation<R, F>(
                 break;
             }
             Ok(n) => g.len += n,
-            Err(ref e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(ref e) if e.kind() == StdErrorKind::Interrupted => {}
             Err(e) => {
                 ret = Err(e);
                 break;

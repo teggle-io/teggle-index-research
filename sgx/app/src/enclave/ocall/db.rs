@@ -2,10 +2,11 @@ use std::ptr;
 
 use log::warn;
 
-use db::GLOBAL_DB;
-use enclave::allocate::allocate_enclave_buffer;
 use enclave_ffi_types::{EnclaveBuffer, OcallReturn};
-use traits::Db;
+
+use crate::db::GLOBAL_DB;
+use crate::enclave::allocate::allocate_enclave_buffer;
+use crate::traits::Db;
 
 #[no_mangle]
 pub extern "C"
@@ -48,7 +49,7 @@ fn ocall_db_get_fixed(
     key_len: usize,
     value: *mut u8,
     value_max_len: usize,
-    value_len: *mut usize
+    value_len: *mut usize,
 ) -> OcallReturn {
     let mut ret = OcallReturn::Success;
 

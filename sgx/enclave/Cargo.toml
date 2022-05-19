@@ -2,6 +2,7 @@
 name = "index-enclave"
 version = "0.1.0"
 authors = ["David Radunz <david@teggle.com>"]
+edition = "2018"
 
 [lib]
 name = "index_enclave"

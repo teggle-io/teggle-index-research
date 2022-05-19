@@ -9,18 +9,19 @@ use net2::unix::UnixTcpBuilderExt;
 use std::collections::HashMap;
 use std::time::Instant;
 
-use api::server::config::Config;
-use api::server::connection::Connection;
+use crate::api::server::config::Config;
+use crate::api::server::connection::Connection;
 
 const LISTENER: Token = Token(0);
 
-const MAX_BYTES_RECEIVED: usize = 50 * 1024;
 // 50 Kb
-const KEEPALIVE_DURATION: Duration = Duration::from_secs(7200);
+const MAX_BYTES_RECEIVED: usize = 50 * 1024;
 // System default for now.
+const KEEPALIVE_DURATION: Duration = Duration::from_secs(7200);
+
 const TCP_BACKLOG: i32 = 1024;
 
-const MIO_EVENTS_CAPACITY: usize = 1024;
+const MIO_EVENTS_CAPACITY: usize = TCP_BACKLOG as usize * 2;
 const MIO_TIMEOUT_POLL: Duration = Duration::from_millis(1000);
 
 struct Server {

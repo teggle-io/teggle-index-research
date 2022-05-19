@@ -1,10 +1,10 @@
 use std::panic;
 use std::panic::AssertUnwindSafe;
 
-use api::handler::request::{Context, Request};
-use api::handler::response::Response;
-use api::handler::router::Handler;
-use api::results::Error;
+use crate::api::handler::request::{Context, Request};
+use crate::api::handler::response::Response;
+use crate::api::handler::router::Handler;
+use crate::api::results::Error;
 
 pub(crate) fn middleware_recovery(
     req: &Request,

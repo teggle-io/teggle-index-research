@@ -1,16 +1,16 @@
+use std::{env, path::Path};
 use std::ops::Deref;
 use std::time::Duration;
-use std::{env, path::Path};
 
+use lazy_static::lazy_static;
+use log::*;
+use parking_lot::{Condvar, Mutex};
 use sgx_types::{
     sgx_attributes_t, sgx_launch_token_t, sgx_misc_attribute_t, sgx_status_t, SgxResult,
 };
 use sgx_urts::SgxEnclave;
 
-use lazy_static::lazy_static;
-use log::*;
-use parking_lot::{Condvar, Mutex};
-use enclave::ecall::init::ecall_init;
+use crate::enclave::ecall::init::ecall_init;
 
 #[cfg(feature = "production")]
 const ENCLAVE_DEBUG: i32 = 0;

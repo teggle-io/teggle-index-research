@@ -3,6 +3,7 @@ name = "index-node"
 version = "0.1.0"
 authors = ["David Radunz <david@teggle.com>"]
 build = "build.rs"
+edition = "2018"
 
 [features]
 default = []

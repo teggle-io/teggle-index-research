@@ -1,12 +1,13 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use bytes::{BytesMut};
+use bytes::BytesMut;
 use http::{header::HeaderValue, Request, Response};
 use http::request::Builder;
 use lazy_static::lazy_static;
-use std::{fmt};
-use api::results::{Error, ErrorKind};
+use std::fmt;
+
+use crate::api::results::{Error, ErrorKind};
 
 lazy_static! {
     pub(crate) static ref GLOBAL_CODEC: HttpCodec = {

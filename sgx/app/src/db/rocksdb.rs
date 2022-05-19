@@ -1,8 +1,9 @@
 use rocksdb::{DB, DBCompactionStyle, Options};
-use traits::{Db, Error, Result};
+
+use crate::traits::{Db, Error, Result};
 
 pub struct RocksDb {
-    db: DB
+    db: DB,
 }
 
 impl RocksDb {
@@ -31,7 +32,7 @@ impl RocksDb {
             Err(err) => {
                 Err(map_rocks_err(err))
             }
-        }
+        };
     }
 }
 

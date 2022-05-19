@@ -1,9 +1,9 @@
 use log::trace;
 use sgx_types::{sgx_status_t, SgxResult};
 
-use enclave::ecall::allocate::ecall_allocate;
-use ENCLAVE_DOORBELL;
-use enclave_ffi_types::EnclaveBuffer;
+use crate::enclave::ecall::allocate::ecall_allocate;
+use crate::ENCLAVE_DOORBELL;
+use crate::enclave_ffi_types::EnclaveBuffer;
 
 /// This is a safe wrapper for allocating buffers inside the enclave.
 pub(crate) fn allocate_enclave_buffer(buffer: &[u8]) -> SgxResult<EnclaveBuffer> {

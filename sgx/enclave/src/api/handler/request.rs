@@ -12,11 +12,11 @@ use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::time::Instant;
 
-use api::handler::codec::GLOBAL_CODEC;
-use api::handler::response::Response;
-use api::handler::router::route_request;
-use api::results::{EncodedResponseResult, Error, ErrorKind};
-use api::server::connection::{UPGRADE_OPT_KEEPALIVE};
+use crate::api::handler::codec::GLOBAL_CODEC;
+use crate::api::handler::response::Response;
+use crate::api::handler::router::route_request;
+use crate::api::results::{EncodedResponseResult, Error, ErrorKind};
+use crate::api::server::connection::{UPGRADE_OPT_KEEPALIVE};
 
 static CONN_KEEPALIVE: &str = "keep-alive";
 

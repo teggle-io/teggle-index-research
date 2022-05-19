@@ -1,16 +1,16 @@
 use alloc::boxed::Box;
+
+use lazy_static::lazy_static;
+use log::*;
 use std::ffi::c_void;
 use std::panic;
 use std::sync::SgxMutex;
 use std::vec::Vec;
 
-use lazy_static::lazy_static;
-use log::*;
+use enclave_ffi_types::EnclaveBuffer;
 
-use enclave_ffi_types::{EnclaveBuffer};
-use validate_const_ptr;
-
-use crate::utils::{oom_handler};
+use crate::utils::oom_handler;
+use crate::validate_const_ptr;
 
 lazy_static! {
     static ref ECALL_ALLOCATE_STACK: SgxMutex<Vec<EnclaveBuffer>> = SgxMutex::new(Vec::new());
