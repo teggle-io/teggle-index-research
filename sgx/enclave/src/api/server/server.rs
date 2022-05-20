@@ -11,6 +11,8 @@ use std::time::Instant;
 
 use crate::api::server::config::Config;
 use crate::api::server::connection::Connection;
+use crate::api::server::exec::ExecManager;
+use crate::api::server::httpc::HttpcManager;
 
 const LISTENER: Token = Token(0);
 
@@ -18,29 +20,38 @@ const LISTENER: Token = Token(0);
 const MAX_BYTES_RECEIVED: usize = 50 * 1024;
 // System default for now.
 const KEEPALIVE_DURATION: Duration = Duration::from_secs(7200);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const EXEC_TIMEOUT: Duration = Duration::from_secs(10);
 
 const TCP_BACKLOG: i32 = 1024;
 
 const MIO_EVENTS_CAPACITY: usize = TCP_BACKLOG as usize * 2;
 const MIO_TIMEOUT_POLL: Duration = Duration::from_millis(1000);
 
-struct Server {
+const MIO_SERVER_OFFSET: usize = 10;
+const MIO_EXEC_OFFSET: usize = MIO_SERVER_OFFSET + u32::MAX as usize;
+const MIO_HTTPC_OFFSET: usize = MIO_EXEC_OFFSET + u32::MAX as usize;
+
+pub(crate) struct Server {
     server: TcpListener,
     connections: HashMap<Token, Connection>,
     config: Arc<Config>,
+    exec: ExecManager,
+    httpc: HttpcManager,
     next_id: usize,
     last_timeout: Instant,
 }
 
 impl Server {
-    fn new(server: TcpListener) -> Self {
+    fn new(server: TcpListener, config: Arc<Config>) -> Self {
         Self {
             server,
             connections: HashMap::new(),
-            config: Arc::new(Config::new(
-                MAX_BYTES_RECEIVED,
-                KEEPALIVE_DURATION)),
-            next_id: 2,
+            config: config.clone(),
+            exec: ExecManager::new(MIO_EXEC_OFFSET, config),
+            httpc: HttpcManager::new(
+                MIO_HTTPC_OFFSET, None),
+            next_id: MIO_SERVER_OFFSET,
             last_timeout: Instant::now(),
         }
     }
@@ -55,8 +66,8 @@ impl Server {
 
                 let token = Token(self.next_id);
 
-                if self.next_id + 1 >= usize::MAX {
-                    self.next_id = 0;
+                if self.next_id + 1 >= (MIO_SERVER_OFFSET + u32::MAX as usize) {
+                    self.next_id = MIO_SERVER_OFFSET;
                 } else {
                     self.next_id += 1;
                 }
@@ -86,27 +97,43 @@ impl Server {
             conn.check_timeout(poll, &now);
         }
 
+        self.exec.check_timeouts(poll);
+        self.httpc.check_timeouts(poll);
+
         self.last_timeout = now;
         true
     }
 
-    fn conn_event(&mut self, poll: &mut mio::Poll, event: &Event) {
+    fn handle_event(&mut self, poll: &mut mio::Poll, event: &Event) {
         let token = event.token();
+        let token_us: usize = usize::from(token);
 
-        if self.connections.contains_key(&token) {
-            self.connections
-                .get_mut(&token)
-                .unwrap()
-                .ready(poll, event);
+        if token_us >= MIO_HTTPC_OFFSET {
+            self.httpc.handle_event(poll, event);
+        } else if token_us >= MIO_EXEC_OFFSET {
+            self.exec.handle_event(poll, event);
+        } else if token_us >= MIO_SERVER_OFFSET {
+            if self.connections.contains_key(&token) {
+                self.connections
+                    .get_mut(&token)
+                    .unwrap()
+                    .ready(poll, event);
 
-            if self.connections[&token].is_closed() {
-                self.connections.remove(&token);
+                if self.connections[&token].is_closed() {
+                    self.connections.remove(&token);
+                }
             }
         }
     }
 }
 
 pub(crate) fn start_api_server(addr: &str) {
+    let config = Arc::new(Config::new(
+        MAX_BYTES_RECEIVED,
+        KEEPALIVE_DURATION,
+        REQUEST_TIMEOUT,
+        EXEC_TIMEOUT));
+
     let listener = TcpListener::from_std(
         TcpBuilder::new_v4().unwrap()
             .reuse_address(true).unwrap()
@@ -120,7 +147,7 @@ pub(crate) fn start_api_server(addr: &str) {
                   mio::Ready::readable(),
                   mio::PollOpt::level()).unwrap();
 
-    let mut server = Server::new(listener);
+    let mut server = Server::new(listener, config);
     let mut events = mio::Events::with_capacity(
         MIO_EVENTS_CAPACITY);
 
@@ -139,7 +166,7 @@ pub(crate) fn start_api_server(addr: &str) {
                     }
                 }
                 _ => {
-                    server.conn_event(&mut poll, &event)
+                    server.handle_event(&mut poll, &event)
                 }
             }
         }

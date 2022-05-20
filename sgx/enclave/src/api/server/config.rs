@@ -42,17 +42,23 @@ pub(crate) struct Config {
     tls_config: Arc<rustls::ServerConfig>,
     max_bytes_received: usize,
     keep_alive_time: Duration,
+    request_timeout: Duration,
+    exec_timeout: Duration,
 }
 
 impl Config {
     pub(crate) fn new(
         max_bytes_received: usize,
         keep_alive_time: Duration,
+        request_timeout: Duration,
+        exec_timeout: Duration,
     ) -> Self {
         Self {
             tls_config: make_config(),
             max_bytes_received,
-            keep_alive_time
+            keep_alive_time,
+            request_timeout,
+            exec_timeout
         }
     }
 
@@ -66,6 +72,14 @@ impl Config {
 
     pub(crate) fn keep_alive_time(&self) -> Duration {
         self.keep_alive_time
+    }
+
+    pub(crate) fn request_timeout(&self) -> Duration {
+        self.request_timeout
+    }
+
+    pub(crate) fn exec_timeout(&self) -> Duration {
+        self.exec_timeout
     }
 }
 

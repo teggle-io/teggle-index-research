@@ -46,13 +46,12 @@ pub(crate) struct RawRequest {
 
 impl RawRequest {
     #[inline]
-    pub(crate) fn new(data: Vec<u8>) -> Result<Self, Error> {
+    pub(crate) fn new(data: Vec<u8>, timeout: Instant) -> Result<Self, Error> {
         let mut req = Self {
             request: None,
             bytes: data.len(),
             data: BytesMut::from(data.as_slice()),
-            timeout: Some(Instant::now() // Timeout for establishing the request.
-                .add(Duration::from_secs(10)))
+            timeout: Some(timeout)
         };
         req.try_decode()?;
 

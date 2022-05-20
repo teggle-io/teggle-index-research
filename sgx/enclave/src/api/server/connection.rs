@@ -2,6 +2,8 @@ use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::ops::Add;
+use core::time::Duration;
 
 use log::{trace, warn};
 use mio::event::Event;
@@ -31,14 +33,17 @@ pub(crate) struct Connection {
 }
 
 impl Connection {
-    pub(crate) fn new(socket: TcpStream,
-           session: rustls::ServerSession,
-           token: mio::Token,
-                      config: Arc<Config>)
-           -> Self {
+    pub(crate) fn new(
+        socket: TcpStream,
+        session: rustls::ServerSession,
+        token: mio::Token,
+        config: Arc<Config>)
+        -> Self {
         Self {
-            socket, session,
-            token, config,
+            socket,
+            session,
+            token,
+            config,
             request: None,
             upgraded: false,
             closing: false,
@@ -73,7 +78,9 @@ impl Connection {
                     return;
                 }
             } else {
-                match RawRequest::new(request_body) {
+                match RawRequest::new(request_body,
+                                      Instant::now()
+                                          .add(self.config.request_timeout())) {
                     Ok(req) => {
                         self.request = Some(req);
                     }
@@ -275,7 +282,7 @@ impl Connection {
             self.write_tls_and_handle_error();
 
             self.closing = true;
-            return ;
+            return;
         }
     }
 
@@ -337,7 +344,7 @@ impl Connection {
                 self.handle_error(
                     &Error::new_with_kind(
                         ErrorKind::TimedOut,
-                        "request timed out".to_string()
+                        "request timed out".to_string(),
                     )
                 );
                 self.write_tls_and_handle_error();
@@ -351,7 +358,7 @@ fn too_many_bytes_io_err(bytes: usize, max_bytes: usize) -> std::io::Error {
     std::io::Error::new(
         StdErrorKind::ConnectionAborted,
         Box::new(
-            too_many_bytes_err(bytes, max_bytes))
+            too_many_bytes_err(bytes, max_bytes)),
     )
 }
 
@@ -390,7 +397,7 @@ fn read_to_end<R: Read + ?Sized>(
     r: &mut R,
     buf: &mut Vec<u8>,
     max_bytes: usize,
-    bytes_read: usize
+    bytes_read: usize,
 ) -> std::io::Result<usize> {
     read_to_end_with_reservation(r, buf, |_| 32, max_bytes, bytes_read)
 }
@@ -400,7 +407,7 @@ fn read_to_end_with_reservation<R, F>(
     buf: &mut Vec<u8>,
     mut reservation_size: F,
     max_bytes: usize,
-    bytes_read: usize
+    bytes_read: usize,
 ) -> std::io::Result<usize>
     where
         R: Read + ?Sized,
