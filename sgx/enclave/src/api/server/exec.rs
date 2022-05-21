@@ -2,13 +2,12 @@ use alloc::sync::Arc;
 use core::future::Future;
 use core::ops::Add;
 use core::task::Context;
-use core::time::Duration;
 
-use futures::{FutureExt, poll};
+use futures::{FutureExt};
 use futures::future::BoxFuture;
 use futures::task::{ArcWake, waker_ref};
 use mio::{Poll, PollOpt, Ready, Registration, SetReadiness, Token};
-use mio::event::{Event, Evented};
+use mio::event::{Evented};
 use std::collections::HashMap;
 use std::sync::SgxMutex;
 use std::time::Instant;
@@ -45,16 +44,12 @@ impl ExecManager {
             token, SgxMutex::new(Some(future)),
             Instant::now().add(self.config.exec_timeout())
         )));
-        self.tasks.get_mut(&token)
-            .unwrap()
-            .register(poll, token,
-                      Ready::readable(),
-                      mio::PollOpt::level() | mio::PollOpt::oneshot())
-            .unwrap();
+        self.tasks.get_mut(&token).unwrap().start(poll, token.clone());
+
+        trace!("spawn[{:?}]: SPAWNED", token.clone());
     }
 
-    pub(crate) fn handle_event(&mut self, poll: &mut mio::Poll, event: &Event) {
-        let token = event.token();
+    pub(crate) fn ready(&mut self, poll: &mut mio::Poll, token: mio::Token) {
         if self.tasks.contains_key(&token) {
             let task = self.tasks.remove(&token)
                 .unwrap();
@@ -64,14 +59,21 @@ impl ExecManager {
                 let waker = waker_ref(&task);
                 let context = &mut Context::from_waker(&*waker);
                 if future.as_mut().poll(context).is_pending() {
+                    trace!("ready[{:?}]: PENDING", token);
                     *future_slot = Some(future);
 
                     self.tasks.insert(token.clone(), task.clone());
                     task.reregister(poll, token, Ready::readable(),
                                     mio::PollOpt::level() | mio::PollOpt::oneshot())
                         .unwrap();
+                } else {
+                    trace!("ready[{:?}]: COMPLETE", token);
                 }
+            } else {
+                trace!("ready[{:?}]: NO FUTURE", token);
             }
+        } else {
+            trace!("ready[{:?}]: TASK MISSING", token);
         }
     }
 
@@ -97,6 +99,14 @@ impl Task {
         let (registration, set_readiness) = Registration::new2();
 
         Self { token, future, registration, set_readiness, deadline }
+    }
+
+    fn start(&self, poll: &Poll, token: mio::Token) {
+        self.register(poll, token, Ready::readable(),
+                        mio::PollOpt::level() | mio::PollOpt::oneshot())
+            .unwrap();
+        self.set_readiness.set_readiness(Ready::readable())
+            .unwrap();
     }
 }
 

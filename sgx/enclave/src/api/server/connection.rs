@@ -3,7 +3,6 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ops::Add;
-use core::time::Duration;
 
 use log::{trace, warn};
 use mio::event::Event;
@@ -12,59 +11,49 @@ use rustls::Session;
 use std::io;
 use std::io::{ErrorKind as StdErrorKind, Read, Write};
 use std::net::Shutdown;
+use std::sync::{SgxMutex, SgxMutexGuard};
 use std::time::Instant;
 
 use crate::api::handler::request::{process_raw_request, RawRequest};
 use crate::api::handler::response::Response;
 use crate::api::results::{Error, ErrorKind, ResponseBody};
 use crate::api::server::config::Config;
+use crate::api::server::exec::ExecManager;
 
 pub(crate) static UPGRADE_OPT_KEEPALIVE: u8 = 2;
 
 pub(crate) struct Connection {
-    socket: TcpStream,
-    session: rustls::ServerSession,
-    token: mio::Token,
-    config: Arc<Config>,
-    request: Option<RawRequest>,
-    upgraded: bool,
-    closing: bool,
-    closed: bool,
+    session: Arc<SgxMutex<TlsSession>>,
+    exec: Arc<SgxMutex<ExecManager>>,
 }
 
 impl Connection {
     pub(crate) fn new(
-        socket: TcpStream,
-        session: rustls::ServerSession,
-        token: mio::Token,
-        config: Arc<Config>)
+        session: Arc<SgxMutex<TlsSession>>,
+        exec: Arc<SgxMutex<ExecManager>>)
         -> Self {
         Self {
-            socket,
             session,
-            token,
-            config,
-            request: None,
-            upgraded: false,
-            closing: false,
-            closed: false,
+            exec,
         }
     }
 
-    fn read_and_process_request(&mut self) {
-        if self.closing || self.closed {
+    fn handle_request(&self, session: &mut SgxMutexGuard<TlsSession>, poll: &mut mio::Poll) {
+        let config = session.config.clone();
+
+        if session.is_closed() || session.is_closing() {
             return;
         }
 
         let mut bytes_read: usize = 0;
-        if let Some(req) = self.request.as_ref() {
+        if let Some(req) = session.request.as_ref() {
             bytes_read = req.len();
         }
 
         let mut request_body = Vec::new();
-        let r = self.read(&mut request_body, bytes_read);
+        let r = session.read(&mut request_body, bytes_read);
         if r == -1 {
-            self.closing = true;
+            session.set_closing(true);
             return;
         }
 
@@ -72,60 +61,195 @@ impl Connection {
             trace!("req body: {:?}", String::from_utf8(request_body.clone()));
 
             // Consume request body.
-            if let Some(req) = &mut self.request {
+            if let Some(req) = &mut session.request {
                 if let Err(err) = req.next(request_body) {
-                    self.handle_error(&err);
+                    session.handle_error(&err);
                     return;
                 }
             } else {
                 match RawRequest::new(request_body,
                                       Instant::now()
-                                          .add(self.config.request_timeout())) {
+                                          .add(config.request_timeout())) {
                     Ok(req) => {
-                        self.request = Some(req);
+                        session.request = Some(req);
                     }
                     Err(err) => {
-                        self.handle_error(&err);
+                        session.handle_error(&err);
                         return;
                     }
                 }
             }
 
-            if self.request.is_some() {
-                let req = self.request.as_ref().unwrap();
-
-                // Check payload size.
-                if let Some(content_len) = req.content_length() {
-                    if content_len > self.config.max_bytes_received() {
-                        self.handle_error(&too_many_bytes_err(
-                            content_len,
-                            self.config.max_bytes_received()));
-                        return;
-                    }
-                }
-
-                // Upgrade connection.
-                if !self.upgraded {
-                    self.upgrade(req.upgrade_opts());
-                    self.upgraded = true;
-                }
-
-                // Ready?
-                if req.ready() {
-                    let req = self.request.take().unwrap();
-                    self.request = None;
-
-                    match process_raw_request(req) {
-                        Ok(res) => {
-                            self.send_response(res);
-                        }
-                        Err(err) => {
-                            self.handle_error(&err);
+            if session.request.is_some() {
+                let mut upgrade_opts = 0_u8;
+                if let Some(req) = session.request.as_ref() {
+                    // Check payload size.
+                    if let Some(content_len) = req.content_length() {
+                        if content_len > config.max_bytes_received() {
+                            session.handle_error(&too_many_bytes_err(
+                                content_len,
+                                config.max_bytes_received()));
                             return;
                         }
                     }
+
+                    upgrade_opts = req.upgrade_opts();
+                }
+
+                // Upgrade connection.
+                if upgrade_opts > 0 {
+                    session.upgrade(upgrade_opts);
+                }
+
+                if let Some(req) = session.request.as_ref() {
+                    // Ready?
+                    if req.ready() {
+                        let req = session.request.take().unwrap();
+
+                        match self.exec.lock() {
+                            Ok(mut exec) => {
+                                let session = self.session.clone();
+
+                                exec.spawn(poll, async move {
+                                    match process_raw_request(req) {
+                                        Ok(res) => {
+                                            match session.lock() {
+                                                Ok(mut session) => {
+                                                    session.send_response(res);
+                                                    session.write_tls_and_handle_error();
+                                                    if session.is_closing() {
+                                                        session.close();
+                                                    }
+                                                }
+                                                Err(err) => {
+                                                    error!("failed to acquire lock on 'session' when \
+                                                    handling process_raw_request->send_response: {:?}", err);
+                                                }
+                                            }
+                                        }
+                                        Err(err) => {
+                                            match session.lock() {
+                                                Ok(mut session) => {
+                                                    session.handle_error(&err);
+                                                    session.write_tls_and_handle_error();
+                                                    if session.is_closing() {
+                                                        session.close();
+                                                    }
+                                                }
+                                                Err(nested_err) => {
+                                                    error!("failed to acquire lock on 'session' when \
+                                                    handling process_raw_request->send_response: {:?}, \
+                                                    origin err: {:?}", nested_err, err);
+                                                }
+                                            }
+                                        }
+                                    }
+                                });
+                            }
+                            Err(err) => {
+                                session.handle_error(&Error::new_with_kind(
+                                    ErrorKind::ExecError, err.to_string()));
+                                return;
+                            }
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    pub(crate) fn ready(&mut self, poll: &mut mio::Poll, ev: &Event) {
+        match self.session.lock() {
+            Ok(mut session) => {
+                if ev.readiness().is_readable() {
+                    trace!("ready[{:?}]: READ", ev.token());
+                    session.read_tls();
+                    self.handle_request(&mut session, poll);
+                }
+
+                if ev.readiness().is_writable() {
+                    trace!("ready[{:?}]: WRITE", ev.token());
+                    session.write_tls_and_handle_error();
+                }
+
+                if session.is_closing() {
+                    trace!("ready[{:?}]: CLOSE", ev.token());
+                    session.close();
+                    session.deregister(poll);
+                } else {
+                    trace!("ready[{:?}]: CONTINUE", ev.token());
+                    session.reregister(poll);
+                }
+            }
+            Err(err) => {
+                error!("failed to acquire lock on 'session' when handling event: {:?}", err);
+            }
+        }
+    }
+
+    pub fn register(&mut self, poll: &mut mio::Poll) {
+        match self.session.lock() {
+            Ok(session) => {
+                session.register(poll);
+            }
+            Err(err) => {
+                error!("failed to acquire lock on 'session' when calling 'register': {:?}", err);
+            }
+        }
+    }
+
+    pub fn check_timeout(&mut self, poll: &mut mio::Poll, now: &Instant) {
+        match self.session.lock() {
+            Ok(mut session) => {
+                session.check_timeout(poll, now);
+            }
+            Err(err) => {
+                error!("failed to acquire lock on 'session' when calling 'check_timeout': {:?}", err);
+            }
+        }
+    }
+
+    pub(crate) fn is_closed(&self) -> bool {
+        match self.session.lock() {
+            Ok(session) => {
+                return session.is_closed();
+            }
+            Err(err) => {
+                error!("failed to acquire lock on 'session' when calling 'is_closed': {:?}", err);
+            }
+        }
+
+        false
+    }
+}
+
+pub(crate) struct TlsSession {
+    token: mio::Token,
+    socket: TcpStream,
+    session: rustls::ServerSession,
+    config: Arc<Config>,
+    request: Option<RawRequest>,
+    upgraded: bool,
+    closing: bool,
+    closed: bool,
+}
+
+impl TlsSession {
+    pub(crate) fn new(
+        token: mio::Token,
+        socket: TcpStream,
+        session: rustls::ServerSession,
+        config: Arc<Config>,
+    ) -> Self {
+        Self {
+            token,
+            socket,
+            session,
+            config,
+            request: None,
+            upgraded: false,
+            closing: false,
+            closed: false,
         }
     }
 
@@ -171,33 +295,12 @@ impl Connection {
                     self.config.max_bytes_received(), bytes_read)
     }
 
-    pub(crate) fn ready(&mut self, poll: &mut mio::Poll, ev: &Event) {
-        if ev.readiness().is_readable() {
-            trace!("ready: READ");
-            self.read_tls();
-            self.read_and_process_request();
-        }
-
-        if ev.readiness().is_writable() {
-            trace!("ready: WRITE");
-            self.write_tls_and_handle_error();
-        }
-
-        if self.closing {
-            trace!("ready: CLOSE");
-            self.close(poll);
-        } else {
-            trace!("ready: CONTINUE");
-            self.reregister(poll);
-        }
-    }
-
-    fn close(&mut self, poll: &mut mio::Poll) {
+    fn close(&mut self) {
         self.session.send_close_notify();
         let _ = self.socket.shutdown(Shutdown::Both);
         self.closed = true;
-        self.deregister(poll);
     }
+
 
     pub(crate) fn register(&self, poll: &mut mio::Poll) {
         poll.register(&self.socket,
@@ -316,14 +419,28 @@ impl Connection {
         }
     }
 
-    pub(crate) fn is_closed(&self) -> bool {
+    pub(crate) fn is_closing(&self) -> bool {
         self.closing
     }
 
-    pub(crate) fn upgrade(&self, opts: u8) {
+    pub(crate) fn set_closing(&mut self, closing: bool) {
+        self.closing = closing;
+    }
+
+    pub(crate) fn is_closed(&self) -> bool {
+        self.closed
+    }
+
+    pub(crate) fn upgrade(&mut self, opts: u8) {
+        if self.upgraded {
+            return;
+        }
+
         if opts & UPGRADE_OPT_KEEPALIVE > 0 {
             self.set_keepalive();
         }
+
+        self.upgraded = true;
     }
 
     pub(crate) fn set_keepalive(&self) {
@@ -348,11 +465,13 @@ impl Connection {
                     )
                 );
                 self.write_tls_and_handle_error();
-                self.close(poll);
+                self.close();
+                self.deregister(poll);
             }
         }
     }
 }
+
 
 fn too_many_bytes_io_err(bytes: usize, max_bytes: usize) -> std::io::Error {
     std::io::Error::new(

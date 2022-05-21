@@ -7,10 +7,11 @@ use mio::Token;
 use net2::TcpBuilder;
 use net2::unix::UnixTcpBuilderExt;
 use std::collections::HashMap;
+use std::sync::{SgxMutex};
 use std::time::Instant;
 
 use crate::api::server::config::Config;
-use crate::api::server::connection::Connection;
+use crate::api::server::connection::{Connection, TlsSession};
 use crate::api::server::exec::ExecManager;
 use crate::api::server::httpc::HttpcManager;
 
@@ -36,21 +37,26 @@ pub(crate) struct Server {
     server: TcpListener,
     connections: HashMap<Token, Connection>,
     config: Arc<Config>,
-    exec: ExecManager,
-    httpc: HttpcManager,
+    exec: Arc<SgxMutex<ExecManager>>,
+    httpc: Arc<SgxMutex<HttpcManager>>,
     next_id: usize,
     last_timeout: Instant,
 }
 
 impl Server {
     fn new(server: TcpListener, config: Arc<Config>) -> Self {
+        let exec = Arc::new(
+            SgxMutex::new(ExecManager::new(MIO_EXEC_OFFSET, config.clone())));
+        let httpc = Arc::new(
+            SgxMutex::new(HttpcManager::new(
+                MIO_HTTPC_OFFSET, None)));
+
         Self {
             server,
             connections: HashMap::new(),
             config: config.clone(),
-            exec: ExecManager::new(MIO_EXEC_OFFSET, config),
-            httpc: HttpcManager::new(
-                MIO_HTTPC_OFFSET, None),
+            exec,
+            httpc,
             next_id: MIO_SERVER_OFFSET,
             last_timeout: Instant::now(),
         }
@@ -72,10 +78,13 @@ impl Server {
                     self.next_id += 1;
                 }
 
-                self.connections.insert(token, Connection::new(socket,
-                                                               session,
-                                                               token,
-                                                               self.config.clone()));
+                let conn_session = Arc::new(SgxMutex::new(
+                    TlsSession::new(token.clone(), socket, session,
+                                    self.config.clone())
+                ));
+
+                self.connections.insert(token, Connection::new(conn_session,
+                                                               self.exec.clone()));
                 self.connections.get_mut(&token).unwrap().register(poll);
 
                 true
@@ -97,8 +106,19 @@ impl Server {
             conn.check_timeout(poll, &now);
         }
 
-        self.exec.check_timeouts(poll);
-        self.httpc.check_timeouts(poll);
+        match self.httpc.lock() {
+            Ok(mut httpc) => httpc.check_timeouts(poll),
+            Err(err) => {
+                error!("failed to acquire lock on 'httpc' when checking timeouts: {:?}", err);
+            }
+        }
+
+        match self.exec.lock() {
+            Ok(mut exec) => exec.check_timeouts(poll),
+            Err(err) => {
+                error!("failed to acquire lock on 'exec' when checking timeouts: {:?}", err);
+            }
+        }
 
         self.last_timeout = now;
         true
@@ -109,9 +129,19 @@ impl Server {
         let token_us: usize = usize::from(token);
 
         if token_us >= MIO_HTTPC_OFFSET {
-            self.httpc.handle_event(poll, event);
+            match self.httpc.lock() {
+                Ok(mut httpc) => httpc.handle_event(poll, event),
+                Err(err) => {
+                    error!("failed to acquire lock on 'httpc' when handling event: {:?}", err);
+                }
+            }
         } else if token_us >= MIO_EXEC_OFFSET {
-            self.exec.handle_event(poll, event);
+            match self.exec.lock() {
+                Ok(mut exec) => exec.ready(poll, event.token()),
+                Err(err) => {
+                    error!("failed to acquire lock on 'exec' when handling event: {:?}", err);
+                }
+            }
         } else if token_us >= MIO_SERVER_OFFSET {
             if self.connections.contains_key(&token) {
                 self.connections

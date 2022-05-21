@@ -1,8 +1,6 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use core::ops::Add;
 use core::str::FromStr;
-use core::time::Duration;
 
 use bytes::BytesMut;
 use http::{Extensions, HeaderMap, HeaderValue, Method, Uri, Version};
