@@ -7,6 +7,7 @@ use core::ops::Add;
 use log::{trace, warn};
 use mio::event::Event;
 use mio::net::TcpStream;
+use mio::Poll;
 use rustls::Session;
 use std::io;
 use std::io::{ErrorKind as StdErrorKind, Read, Write};
@@ -20,6 +21,7 @@ use crate::api::{
     results::{Error, ErrorKind, ResponseBody},
     server::config::Config,
     server::exec::ExecManager,
+    server::httpc::HttpcManager
 };
 
 pub(crate) static UPGRADE_OPT_KEEPALIVE: u8 = 2;
@@ -27,16 +29,19 @@ pub(crate) static UPGRADE_OPT_KEEPALIVE: u8 = 2;
 pub(crate) struct Connection {
     session: Arc<SgxMutex<TlsSession>>,
     exec: Arc<SgxMutex<ExecManager>>,
+    httpc: Arc<SgxMutex<HttpcManager>>,
 }
 
 impl Connection {
     pub(crate) fn new(
         session: Arc<SgxMutex<TlsSession>>,
         exec: Arc<SgxMutex<ExecManager>>,
+        httpc: Arc<SgxMutex<HttpcManager>>,
     ) -> Self {
         Self {
             session,
             exec,
+            httpc
         }
     }
 

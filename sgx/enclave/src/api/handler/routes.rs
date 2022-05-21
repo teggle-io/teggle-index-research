@@ -3,9 +3,9 @@ use alloc::string::String;
 use alloc::sync::Arc;
 
 use lazy_static::lazy_static;
+
 use crate::api::handler::request::{Context, Request};
 use crate::api::handler::response::Response;
-
 use crate::api::handler::router::{Handler, Router};
 use crate::api::middleware::recovery::middleware_recovery;
 
@@ -25,7 +25,7 @@ fn build_routes() -> Router {
     r.require(middleware_recovery);
 
     r.route("/test", |mut r| {
-        r.require(|req: &Request, res: &mut Response, ctx: &mut Context, next: Handler| Box::pin(async move {
+        r.require(|req, res, ctx, next| Box::pin(async move {
             info!("inside test");
             ctx.insert("test", "value");
 

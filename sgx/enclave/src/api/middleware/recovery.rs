@@ -28,7 +28,6 @@ pub(crate) fn middleware_recovery<'a>(
                 }
 
                 warn!("recovered from panic during request: {}", err_msg);
-
                 res.fault()
             }
         }

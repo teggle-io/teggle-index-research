@@ -7,7 +7,7 @@ use mio::Token;
 use net2::TcpBuilder;
 use net2::unix::UnixTcpBuilderExt;
 use std::collections::HashMap;
-use std::sync::{SgxMutex};
+use std::sync::SgxMutex;
 use std::time::Instant;
 
 use crate::api::server::config::Config;
@@ -84,7 +84,8 @@ impl Server {
                 ));
 
                 self.connections.insert(token, Connection::new(conn_session,
-                                                               self.exec.clone()));
+                                                               self.exec.clone(),
+                                                               self.httpc.clone()));
                 self.connections.get_mut(&token).unwrap().register(poll);
 
                 true
@@ -184,6 +185,7 @@ pub(crate) fn start_api_server(addr: &str) {
     'outer: loop {
         poll.poll(&mut events, Some(MIO_TIMEOUT_POLL))
             .unwrap();
+
         if server.check_timeouts(&mut poll) {
             continue 'outer;
         }
