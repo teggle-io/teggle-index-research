@@ -14,11 +14,13 @@ use std::net::Shutdown;
 use std::sync::{SgxMutex, SgxMutexGuard};
 use std::time::Instant;
 
-use crate::api::handler::request::{process_raw_request, RawRequest};
-use crate::api::handler::response::Response;
-use crate::api::results::{Error, ErrorKind, ResponseBody};
-use crate::api::server::config::Config;
-use crate::api::server::exec::ExecManager;
+use crate::api::{
+    handler::request::{process_raw_request, RawRequest},
+    handler::response::Response,
+    results::{Error, ErrorKind, ResponseBody},
+    server::config::Config,
+    server::exec::ExecManager,
+};
 
 pub(crate) static UPGRADE_OPT_KEEPALIVE: u8 = 2;
 
@@ -30,8 +32,8 @@ pub(crate) struct Connection {
 impl Connection {
     pub(crate) fn new(
         session: Arc<SgxMutex<TlsSession>>,
-        exec: Arc<SgxMutex<ExecManager>>)
-        -> Self {
+        exec: Arc<SgxMutex<ExecManager>>,
+    ) -> Self {
         Self {
             session,
             exec,
@@ -63,7 +65,7 @@ impl Connection {
             // Consume request body.
             if let Some(req) = &mut session.request {
                 if let Err(err) = req.next(request_body) {
-                    session.handle_error(&err);
+                    session.handle_error(&err, false);
                     return;
                 }
             } else {
@@ -74,7 +76,7 @@ impl Connection {
                         session.request = Some(req);
                     }
                     Err(err) => {
-                        session.handle_error(&err);
+                        session.handle_error(&err, false);
                         return;
                     }
                 }
@@ -88,7 +90,7 @@ impl Connection {
                         if content_len > config.max_bytes_received() {
                             session.handle_error(&too_many_bytes_err(
                                 content_len,
-                                config.max_bytes_received()));
+                                config.max_bytes_received()), false);
                             return;
                         }
                     }
@@ -111,15 +113,11 @@ impl Connection {
                                 let session = self.session.clone();
 
                                 exec.spawn(poll, async move {
-                                    match process_raw_request(req) {
+                                    match process_raw_request(req).await {
                                         Ok(res) => {
                                             match session.lock() {
                                                 Ok(mut session) => {
-                                                    session.send_response(res);
-                                                    session.write_tls_and_handle_error();
-                                                    if session.is_closing() {
-                                                        session.close();
-                                                    }
+                                                    session.send_response(res, true);
                                                 }
                                                 Err(err) => {
                                                     error!("failed to acquire lock on 'session' when \
@@ -130,15 +128,11 @@ impl Connection {
                                         Err(err) => {
                                             match session.lock() {
                                                 Ok(mut session) => {
-                                                    session.handle_error(&err);
-                                                    session.write_tls_and_handle_error();
-                                                    if session.is_closing() {
-                                                        session.close();
-                                                    }
+                                                    session.handle_error(&err, true);
                                                 }
                                                 Err(nested_err) => {
                                                     error!("failed to acquire lock on 'session' when \
-                                                    handling process_raw_request->send_response: {:?}, \
+                                                    handling process_raw_request->handle_error: {:?}, \
                                                     origin err: {:?}", nested_err, err);
                                                 }
                                             }
@@ -148,7 +142,8 @@ impl Connection {
                             }
                             Err(err) => {
                                 session.handle_error(&Error::new_with_kind(
-                                    ErrorKind::ExecError, err.to_string()));
+                                    ErrorKind::ExecError, err.to_string()),
+                                                     false);
                                 return;
                             }
                         }
@@ -253,7 +248,7 @@ impl TlsSession {
         }
     }
 
-    fn send_response(&mut self, res: ResponseBody) {
+    fn send_response(&mut self, res: ResponseBody, push: bool) {
         let body = res.body();
 
         if body.len() > 0 {
@@ -265,24 +260,30 @@ impl TlsSession {
         if res.close() {
             self.session.send_close_notify();
         }
+        if push {
+            self.write_tls_and_handle_error();
+            if self.is_closing() {
+                self.close();
+            }
+        }
     }
 
     fn handle_io_error(&mut self, err: io::Error) {
         if let Some(err) = err.into_inner() {
             let inner: Option<&Box<Error>> = err.as_ref().downcast_ref();
             if inner.is_some() {
-                self.handle_error(inner.unwrap());
+                self.handle_error(inner.unwrap(), false);
             }
         }
     }
 
-    fn handle_error(&mut self, err: &Error) {
+    fn handle_error(&mut self, err: &Error, push: bool) {
         warn!("failed to handle request: {}", err);
         self.request = None;
 
         match Response::from_error(err).encode() {
             Ok(res) => {
-                self.send_response(res);
+                self.send_response(res, push);
             }
             Err(err) => {
                 warn!("failed to encode response while handling error: {:?}", err)
@@ -462,7 +463,7 @@ impl TlsSession {
                     &Error::new_with_kind(
                         ErrorKind::TimedOut,
                         "request timed out".to_string(),
-                    )
+                    ), true,
                 );
                 self.write_tls_and_handle_error();
                 self.close();

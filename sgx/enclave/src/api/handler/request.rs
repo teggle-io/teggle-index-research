@@ -18,13 +18,13 @@ use crate::api::server::connection::{UPGRADE_OPT_KEEPALIVE};
 
 static CONN_KEEPALIVE: &str = "keep-alive";
 
-pub(crate) fn process_raw_request(raw_req: RawRequest) -> EncodedResponseResult {
+pub(crate) async fn process_raw_request(raw_req: RawRequest) -> EncodedResponseResult {
     match raw_req.extract() {
         Some(mut req) => {
             let mut res = Response::from_request(&req);
             let mut ctx: Context = Context::new();
 
-            route_request(&mut req, &mut res, &mut ctx)?;
+            route_request(&mut req, &mut res, &mut ctx).await?;
 
             res.encode()
         }

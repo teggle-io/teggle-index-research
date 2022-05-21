@@ -1,9 +1,12 @@
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
 
 use lazy_static::lazy_static;
+use crate::api::handler::request::{Context, Request};
+use crate::api::handler::response::Response;
 
-use crate::api::handler::router::Router;
+use crate::api::handler::router::{Handler, Router};
 use crate::api::middleware::recovery::middleware_recovery;
 
 lazy_static! {
@@ -22,22 +25,22 @@ fn build_routes() -> Router {
     r.require(middleware_recovery);
 
     r.route("/test", |mut r| {
-        r.require(|req, res, ctx, next| {
+        r.require(|req: &Request, res: &mut Response, ctx: &mut Context, next: Handler| Box::pin(async move {
             info!("inside test");
             ctx.insert("test", "value");
 
-            next(req, res, ctx)
-        });
+            next(req, res, ctx).await
+        }));
 
-        r.get("/ping", |_req, res, _ctx| {
+        r.get("/ping", |_req, res, _ctx| Box::pin(async move {
             res.ok("PONG")
-        });
+        }));
 
-        r.get("/panic", |_req, _res, _ctx| {
+        r.get("/panic", |_req, _res, _ctx| Box::pin(async move {
             panic!("YELP");
-        });
+        }));
 
-        r.post("/post", |req, res, ctx| {
+        r.post("/post", |req, res, ctx| Box::pin(async move {
             let content_type: Option<String> = req.header(http::header::CONTENT_TYPE);
             let test_val: Option<String> = ctx.get("test");
             let payload: TestPayload = req.json()?;
@@ -47,25 +50,25 @@ fn build_routes() -> Router {
             error!("Payload: {:?}", payload);
 
             res.ok("Ok")
-        });
+        }));
     });
 
-    r.get("/ping", |_req, res, _ctx| {
+    r.get("/ping", |_req, res, _ctx| Box::pin(async move {
         res.ok("PONG")
-    });
+    }));
 
-    r.get("/hello/:name", |req, res, _ctx| {
+    r.get("/hello/:name", |req, res, _ctx| Box::pin(async move {
         let name: Option<String> = req.var("name");
 
         res.ok(format!("Hello {}", name.unwrap()).as_str())
-    });
+    }));
 
-    r.get("/calc/:a/:b", |req, res, _ctx| {
+    r.get("/calc/:a/:b", |req, res, _ctx| Box::pin(async move {
         let a: Option<u32> = req.var("a");
         let b: Option<u32> = req.var("b");
 
         res.ok(format!("Sum {}", a.unwrap() + b.unwrap()).as_str())
-    });
+    }));
 
     r
 }

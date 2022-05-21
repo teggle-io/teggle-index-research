@@ -1,6 +1,8 @@
+use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use futures::future::BoxFuture;
 
 use http::{Method, StatusCode};
 use std::collections::HashMap;
@@ -14,18 +16,18 @@ use crate::api::results::Error;
 
 const CAPTURE_PLACEHOLDER: &'static str = "*CAPTURE*";
 
-pub(crate) type Handler = Arc<dyn Send + Sync + Fn(&Request, &mut Response, &mut Context) -> Result<(), Error>>;
-pub(crate) type HandlerFn = fn(&Request, &mut Response, &mut Context) -> Result<(), Error>;
-pub(crate) type Middleware = Arc<dyn Send + Sync + Fn(&Request, &mut Response, &mut Context, Handler) -> Result<(), Error>>;
-pub(crate) type MiddlewareFn = fn(&Request, &mut Response, &mut Context, Handler) -> Result<(), Error>;
+pub(crate) type Handler = Arc<dyn Send + Sync + for<'a> Fn(&'a Request, &'a mut Response, &'a mut Context) -> BoxFuture<'a, Result<(), Error>>>;
+pub(crate) type HandlerFn = for<'a> fn(&'a Request, &'a mut Response, &'a mut Context) -> BoxFuture<'a, Result<(), Error>>;
+pub(crate) type Middleware = Arc<dyn Send + Sync + for<'a> Fn(&'a Request, &'a mut Response, &'a mut Context, Handler) -> BoxFuture<'a, Result<(), Error>>>;
+pub(crate) type MiddlewareFn = for<'a> fn(&'a Request, &'a mut Response, &'a mut Context, Handler) -> BoxFuture<'a, Result<(), Error>>;
 
 #[inline]
-pub(crate) fn route_request(req: &mut Request, res: &mut Response, ctx: &mut Context) -> Result<(), Error> {
+pub(crate) async fn route_request(req: &mut Request, res: &mut Response, ctx: &mut Context) -> Result<(), Error> {
     match ROUTER.clone().find(req.method(), req.uri().path()) {
         Some((handler, captures)) => {
             req.vars(captures);
 
-            handler.route(req, res, ctx)
+            handler.route(req, res, ctx).await
         }
         None => {
             res.error(StatusCode::NOT_FOUND, "Not Found")
@@ -75,7 +77,6 @@ impl Router {
     pub fn require(&mut self, middleware: MiddlewareFn) -> &mut Self {
         self.require_raw(Arc::new(middleware))
     }
-
 
     #[allow(dead_code)]
     #[inline]
@@ -303,8 +304,11 @@ impl RouteHandler {
         let cb_handler = handler.clone();
         let mut middleware: Vec<Middleware> = middleware.clone();
         middleware.push(Arc::new(move |req, res, ctx, _next| {
-            // Last middleware to call handler, do not call next.
-            cb_handler(req, res, ctx)
+            let cb_handler = cb_handler.clone();
+            Box::pin(async move {
+                // Last middleware to call handler, do not call next.
+                cb_handler(req, res, ctx).await
+            })
         }));
 
         Self {
@@ -316,26 +320,39 @@ impl RouteHandler {
         }
     }
 
-    fn route(&self, req: &mut Request, res: &mut Response, ctx: &mut Context) -> Result<(), Error> {
+    async fn route(&self, req: &mut Request, res: &mut Response, ctx: &mut Context) -> Result<(), Error> {
         let middleware: Vec<Middleware> = self.middleware.clone();
-        _route_step(req, res, ctx, Arc::new(middleware), 0)
+        _route_step(req, res, ctx, Arc::new(middleware), 0).await
     }
 }
 
-fn _route_step(
-    req: &Request,
-    res: &mut Response,
-    ctx: &mut Context,
+fn _route_step<'a>(
+    req: &'a Request,
+    res: &'a mut Response,
+    ctx: &'a mut Context,
     middleware: Arc<Vec<Middleware>>,
-    level: usize
-) -> Result<(), Error> {
-    let cur = middleware.get(level).unwrap();
-    let last = level + 1 >= middleware.len();
-    let middleware = middleware.clone();
-    return cur(req, res, ctx, Arc::new(move |req, res, ctx| {
-        if last { return Ok(()); }
-        _route_step(req, res, ctx, middleware.clone(), level + 1)
-    }));
+    level: usize,
+) -> BoxFuture<'a, Result<(), Error>> {
+    Box::pin(async move {
+        let cur = middleware.get(level).unwrap();
+        let last = level + 1 >= middleware.len();
+        let middleware = middleware.clone();
+
+        cur(
+            req,
+            res,
+            ctx,
+            Arc::new(move |req, res, ctx| {
+                let middleware = middleware.clone();
+                Box::pin(async move {
+                    if last {
+                        return Ok(());
+                    }
+                    _route_step(req, res, ctx, middleware, level + 1).await
+                })
+            }),
+        ).await
+    })
 }
 
 #[derive(Clone)]
