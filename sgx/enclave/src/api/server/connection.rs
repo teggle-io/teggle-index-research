@@ -7,7 +7,6 @@ use core::ops::Add;
 use log::{trace, warn};
 use mio::event::Event;
 use mio::net::TcpStream;
-use mio::Poll;
 use rustls::Session;
 use std::io;
 use std::io::{ErrorKind as StdErrorKind, Read, Write};
@@ -20,23 +19,23 @@ use crate::api::{
     handler::response::Response,
     results::{Error, ErrorKind, ResponseBody},
     server::config::Config,
-    server::exec::ExecManager,
-    server::httpc::HttpcManager
+    server::exec::ExecReactor,
+    server::httpc::HttpcReactor
 };
 
 pub(crate) static UPGRADE_OPT_KEEPALIVE: u8 = 2;
 
 pub(crate) struct Connection {
     session: Arc<SgxMutex<TlsSession>>,
-    exec: Arc<SgxMutex<ExecManager>>,
-    httpc: Arc<SgxMutex<HttpcManager>>,
+    exec: Arc<SgxMutex<ExecReactor>>,
+    httpc: Arc<SgxMutex<HttpcReactor>>,
 }
 
 impl Connection {
     pub(crate) fn new(
         session: Arc<SgxMutex<TlsSession>>,
-        exec: Arc<SgxMutex<ExecManager>>,
-        httpc: Arc<SgxMutex<HttpcManager>>,
+        exec: Arc<SgxMutex<ExecReactor>>,
+        httpc: Arc<SgxMutex<HttpcReactor>>,
     ) -> Self {
         Self {
             session,
@@ -116,9 +115,10 @@ impl Connection {
                         match self.exec.lock() {
                             Ok(mut exec) => {
                                 let session = self.session.clone();
+                                let httpc = self.httpc.clone();
 
                                 exec.spawn(poll, async move {
-                                    match process_raw_request(req).await {
+                                    match process_raw_request(httpc, req).await {
                                         Ok(res) => {
                                             match session.lock() {
                                                 Ok(mut session) => {
@@ -306,7 +306,6 @@ impl TlsSession {
         let _ = self.socket.shutdown(Shutdown::Both);
         self.closed = true;
     }
-
 
     pub(crate) fn register(&self, poll: &mut mio::Poll) {
         poll.register(&self.socket,

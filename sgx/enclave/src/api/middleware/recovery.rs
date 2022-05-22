@@ -1,10 +1,12 @@
 use alloc::boxed::Box;
 use alloc::string::String;
+
+use futures::future::FutureExt;
 use futures::future::BoxFuture;
 use std::panic::AssertUnwindSafe;
-use futures::future::{FutureExt};
 
-use crate::api::handler::request::{Context, Request};
+use crate::api::handler::context::Context;
+use crate::api::handler::request::Request;
 use crate::api::handler::response::Response;
 use crate::api::handler::router::Handler;
 use crate::api::results::Error;

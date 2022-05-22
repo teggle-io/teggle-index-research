@@ -4,9 +4,7 @@ use alloc::sync::Arc;
 
 use lazy_static::lazy_static;
 
-use crate::api::handler::request::{Context, Request};
-use crate::api::handler::response::Response;
-use crate::api::handler::router::{Handler, Router};
+use crate::api::handler::router::{Router};
 use crate::api::middleware::recovery::middleware_recovery;
 
 lazy_static! {
@@ -50,6 +48,16 @@ fn build_routes() -> Router {
             error!("Payload: {:?}", payload);
 
             res.ok("Ok")
+        }));
+
+        r.get("/fetch", |_req, res, ctx| Box::pin(async move {
+            if let Some((_, body)) = ctx.test().await? {
+                res.body(body);
+
+                Ok(())
+            } else {
+                res.ok("No results")
+            }
         }));
     });
 

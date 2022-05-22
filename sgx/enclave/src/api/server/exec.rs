@@ -13,14 +13,14 @@ use std::sync::SgxMutex;
 use std::time::Instant;
 use crate::api::server::config::Config;
 
-pub(crate) struct ExecManager {
+pub(crate) struct ExecReactor {
     tasks: HashMap<Token, Arc<Task>>,
     config: Arc<Config>,
     offset: usize,
     next_id: usize,
 }
 
-impl ExecManager {
+impl ExecReactor {
     pub(crate) fn new(offset: usize, config: Arc<Config>) -> Self {
         Self {
             tasks: HashMap::new(),
@@ -50,12 +50,17 @@ impl ExecManager {
     }
 
     pub(crate) fn ready(&mut self, poll: &mut mio::Poll, token: mio::Token) {
-        if self.tasks.contains_key(&token) {
-            let task = self.tasks.remove(&token)
-                .unwrap();
+        if !self.tasks.contains_key(&token) {
+            trace!("ready[{:?}]: TASK MISSING", token);
+        }
 
-            let mut future_slot = task.future.lock().unwrap();
-            if let Some(mut future) = future_slot.take() {
+        let task = self.tasks.remove(&token)
+            .unwrap();
+        task.reset_readiness();
+
+        let mut future_slot = task.future.lock().unwrap();
+        match future_slot.take() {
+            Some(mut future) => {
                 let waker = waker_ref(&task);
                 let context = &mut Context::from_waker(&*waker);
                 if future.as_mut().poll(context).is_pending() {
@@ -69,11 +74,10 @@ impl ExecManager {
                 } else {
                     trace!("ready[{:?}]: COMPLETE", token);
                 }
-            } else {
+            }
+            None => {
                 trace!("ready[{:?}]: NO FUTURE", token);
             }
-        } else {
-            trace!("ready[{:?}]: TASK MISSING", token);
         }
     }
 
@@ -105,16 +109,25 @@ impl Task {
         self.register(poll, token, Ready::readable(),
                         mio::PollOpt::level() | mio::PollOpt::oneshot())
             .unwrap();
-        self.set_readiness.set_readiness(Ready::readable())
-            .unwrap();
+        self.set_ready();
+    }
+
+    fn set_ready(&self) {
+        if let Err(err) = self.set_readiness.set_readiness(Ready::readable()) {
+            warn!("Task->set_ready->set_readiness failed: {:?}", err);
+        }
+    }
+
+    fn reset_readiness(&self) {
+        if let Err(err) = self.set_readiness.set_readiness(Ready::empty()) {
+            warn!("Task->reset_readiness failed: {:?}", err);
+        }
     }
 }
 
 impl ArcWake for Task {
     fn wake_by_ref(arc_self: &Arc<Self>) {
-        arc_self.set_readiness
-            .set_readiness(Ready::readable())
-            .unwrap();
+        arc_self.set_ready();
     }
 }
 

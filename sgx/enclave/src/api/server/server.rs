@@ -12,8 +12,8 @@ use std::time::Instant;
 
 use crate::api::server::config::Config;
 use crate::api::server::connection::{Connection, TlsSession};
-use crate::api::server::exec::ExecManager;
-use crate::api::server::httpc::HttpcManager;
+use crate::api::server::exec::ExecReactor;
+use crate::api::server::httpc::HttpcReactor;
 
 const LISTENER: Token = Token(0);
 
@@ -37,8 +37,8 @@ pub(crate) struct Server {
     server: TcpListener,
     connections: HashMap<Token, Connection>,
     config: Arc<Config>,
-    exec: Arc<SgxMutex<ExecManager>>,
-    httpc: Arc<SgxMutex<HttpcManager>>,
+    exec: Arc<SgxMutex<ExecReactor>>,
+    httpc: Arc<SgxMutex<HttpcReactor>>,
     next_id: usize,
     last_timeout: Instant,
 }
@@ -46,9 +46,9 @@ pub(crate) struct Server {
 impl Server {
     fn new(server: TcpListener, config: Arc<Config>) -> Self {
         let exec = Arc::new(
-            SgxMutex::new(ExecManager::new(MIO_EXEC_OFFSET, config.clone())));
+            SgxMutex::new(ExecReactor::new(MIO_EXEC_OFFSET, config.clone())));
         let httpc = Arc::new(
-            SgxMutex::new(HttpcManager::new(
+            SgxMutex::new(HttpcReactor::new(
                 MIO_HTTPC_OFFSET, None)));
 
         Self {
@@ -60,6 +60,24 @@ impl Server {
             next_id: MIO_SERVER_OFFSET,
             last_timeout: Instant::now(),
         }
+    }
+
+    pub(crate) fn register(&mut self, poll: &mut mio::Poll) -> std::io::Result<()> {
+        match self.httpc.lock() {
+            Ok(mut httpc) => {
+                httpc.register(poll)?;
+            },
+            Err(err) => {
+                warn!("failed to acquire lock on 'httpc' during server->register: {:?}", err);
+            }
+        }
+
+        poll.register(&self.server,
+                      LISTENER,
+                      mio::Ready::readable(),
+                      mio::PollOpt::level()).unwrap();
+
+        Ok(())
     }
 
     fn accept(&mut self, poll: &mut mio::Poll) -> bool {
@@ -173,14 +191,11 @@ pub(crate) fn start_api_server(addr: &str) {
             .listen(TCP_BACKLOG).unwrap()).unwrap();
 
     let mut poll = mio::Poll::new().unwrap();
-    poll.register(&listener,
-                  LISTENER,
-                  mio::Ready::readable(),
-                  mio::PollOpt::level()).unwrap();
-
     let mut server = Server::new(listener, config);
     let mut events = mio::Events::with_capacity(
         MIO_EVENTS_CAPACITY);
+
+    server.register(&mut poll).unwrap();
 
     'outer: loop {
         poll.poll(&mut events, Some(MIO_TIMEOUT_POLL))

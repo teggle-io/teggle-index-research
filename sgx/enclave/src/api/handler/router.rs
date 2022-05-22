@@ -8,8 +8,9 @@ use http::{Method, StatusCode};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::SgxRwLock;
+use crate::api::handler::context::Context;
 
-use crate::api::handler::request::{Context, Request};
+use crate::api::handler::request::{Request};
 use crate::api::handler::response::Response;
 use crate::api::handler::routes::ROUTER;
 use crate::api::results::Error;

@@ -1,4 +1,5 @@
 use alloc::string::{String, ToString};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::str::FromStr;
 
@@ -8,21 +9,27 @@ use http::header::AsHeaderName;
 use log::warn;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
+use std::sync::SgxMutex;
 use std::time::Instant;
 
 use crate::api::handler::codec::GLOBAL_CODEC;
+use crate::api::handler::context::Context;
 use crate::api::handler::response::Response;
 use crate::api::handler::router::route_request;
 use crate::api::results::{EncodedResponseResult, Error, ErrorKind};
 use crate::api::server::connection::{UPGRADE_OPT_KEEPALIVE};
+use crate::api::server::httpc::HttpcReactor;
 
 static CONN_KEEPALIVE: &str = "keep-alive";
 
-pub(crate) async fn process_raw_request(raw_req: RawRequest) -> EncodedResponseResult {
+pub(crate) async fn process_raw_request(
+    httpc: Arc<SgxMutex<HttpcReactor>>,
+    raw_req: RawRequest
+) -> EncodedResponseResult {
     match raw_req.extract() {
         Some(mut req) => {
             let mut res = Response::from_request(&req);
-            let mut ctx: Context = Context::new();
+            let mut ctx: Context = Context::new(httpc);
 
             route_request(&mut req, &mut res, &mut ctx).await?;
 
@@ -302,50 +309,4 @@ fn has_header<K: AsHeaderName>(headers: &HeaderMap<HeaderValue>, key: K, val: &s
     }
 
     false
-}
-
-pub(crate) struct Context {
-    data: HashMap<String, String>
-}
-
-#[allow(dead_code)]
-impl Context {
-    #[inline]
-    pub(crate) fn new() -> Self {
-        Self { data: HashMap::new() }
-    }
-
-    #[inline]
-    pub fn insert<S>(&mut self, key: S, value: S) -> &mut Self
-        where
-            S: Into<String>,
-    {
-        let key = key.into();
-        let value = value.into();
-
-        self.data.insert(key, value);
-        self
-    }
-
-    #[inline]
-    pub fn get<R, S>(&self, key: S) -> Option<R>
-        where
-            R: FromStr,
-            S: Into<String>,
-    {
-        let key = key.into();
-        self.data.get(&key)?
-            .parse()
-            .ok()
-    }
-
-    #[inline]
-    pub fn contains_key<S>(&mut self, key: S) -> bool
-        where
-            S: Into<String>,
-    {
-        let key = key.into();
-
-        self.data.contains_key(&key)
-    }
 }

@@ -4,63 +4,88 @@ use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
-use mio::event::Event;
+
+use mio::{PollOpt, Ready, Registration, SetReadiness, Token};
+use mio::event::{Event, Evented};
 use mio_httpc::{CallBuilder, CallRef, Httpc, HttpcCfg, Response, SimpleCall};
 use std::collections::HashMap;
+use std::io;
 use std::sync::SgxMutex;
 
 use crate::api::results::{Error, ErrorKind};
 
-pub(crate) struct HttpcManager {
+pub(crate) struct HttpcReactor {
     httpc: Httpc,
     calls: HashMap<CallRef, Arc<SgxMutex<HttpcCall>>>,
+    pending: Vec<Arc<SgxMutex<HttpcCall>>>,
+    waker: HttpcReactorWaker,
 }
 
-impl HttpcManager {
-    pub(crate) fn new(con_offset: usize, cfg: Option<HttpcCfg>) -> Self {
+impl HttpcReactor {
+    pub(crate) fn new(
+        con_offset: usize,
+        cfg: Option<HttpcCfg>,
+    ) -> Self {
         Self {
-            httpc: Httpc::new(con_offset, cfg),
+            httpc: Httpc::new(con_offset + 1, cfg),
             calls: HashMap::new(),
+            waker: HttpcReactorWaker::new(Token(con_offset)),
+            pending: Vec::new(),
         }
     }
 
-    pub(crate) fn call(&mut self, builder: &mut CallBuilder, poll: &mut mio::Poll) -> HttpcCallFuture {
-        let (call, cref) = {
-            match builder.simple_call(&mut self.httpc, poll) {
-                Ok(call) => {
-                    let cref  = call.call().get_ref().clone();
+    pub(crate) fn register(&mut self, poll: &mut mio::Poll) -> std::io::Result<()> {
+        self.waker.register(poll)
+    }
 
-                    (HttpcCall::new(call), Some(cref))
-                }
-                Err(err) => {
-                    (HttpcCall::new_for_error(
-                        Error::new_with_kind(ErrorKind::HttpClientError,
-                                             format!("failed to construct simple call: {:?}", err))
-                    ), None)
-                }
-            }
-        };
+    pub(crate) fn call(&mut self, builder: CallBuilder) -> HttpcCallFuture {
+        let call = Arc::new(SgxMutex::new(
+            HttpcCall::new(builder)
+        ));
 
-        let carc = Arc::new(SgxMutex::new(call));
-        if let Some(cref) = cref {
-            self.calls.insert(cref, carc.clone());
+        self.pending.push(call.clone());
+        if let Err(err) = self.waker.trigger() {
+            warn!("HTTPC reactor failed to trigger waker: {:?}", err)
         }
 
-        HttpcCallFuture::new(carc)
+        HttpcCallFuture::new(call)
     }
 
     pub(crate) fn handle_event(&mut self, poll: &mut mio::Poll, event: &Event) {
-        if let Some(cref) = self.httpc.event(&event) {
-            if self.calls.contains_key(&cref) {
-                if self.calls.get_mut(&cref)
-                    .unwrap()
-                    .lock()
-                    .unwrap()
-                    .ready(&mut self.httpc, poll) {
-                    // Remove finished call.
-                    self.calls.remove(&cref);
+        let token = event.token();
+        if token.eq(&self.waker.token) {
+            trace!("handle_event[{:?}]: CHECK PENDING", token.clone());
+
+            // Clear the waker readiness state prior to removing pending items.
+            if let Err(err) = self.waker.clear() {
+                warn!("HTTPC reactor failed to clear waker: {:?}", err)
+            }
+
+            let pending = std::mem::take(&mut self.pending);
+            for p in pending {
+                trace!("handle_event[{:?}]: SPAWN", token.clone());
+                self.spawn(poll, p);
+            }
+        } else {
+            if let Some(cref) = self.httpc.event(&event) {
+                if self.calls.contains_key(&cref) {
+                    trace!("handle_event[{:?}]: READY", token.clone());
+
+                    if self.calls.get_mut(&cref)
+                        .unwrap()
+                        .lock()
+                        .unwrap()
+                        .ready(&mut self.httpc, poll) {
+                        // Remove finished call.
+                        trace!("handle_event[{:?}]: REMOVED", token.clone());
+                        self.calls.remove(&cref);
+                    }
+
+                    return;
                 }
             }
+
+            warn!("handle_event[{:?}]: CALL NOT FOUND", token.clone());
         }
     }
 
@@ -75,26 +100,116 @@ impl HttpcManager {
             }
         }
     }
+
+    // private
+    fn spawn(&mut self, poll: &mut mio::Poll, call: Arc<SgxMutex<HttpcCall>>) {
+        match call.lock() {
+            Ok(mut lock) => {
+                if lock.err.is_some() {
+                    return;
+                }
+                if lock.builder.is_none() {
+                    lock.err = Some(
+                        Error::new_with_kind(ErrorKind::HttpClientError,
+                                             format!("failed to spawn HTTPC call, missing builder"))
+                    );
+                    return;
+                }
+
+                match lock.builder
+                    .take()
+                    .unwrap()
+                    .simple_call(&mut self.httpc, poll) {
+                    Ok(inner_call) => {
+                        let cref = inner_call.call().get_ref().clone();
+                        lock.call = Some(inner_call);
+
+                        self.calls.insert(cref, call.clone());
+                    }
+                    Err(err) => {
+                        lock.err = Some(
+                            Error::new_with_kind(ErrorKind::HttpClientError,
+                                                 format!("failed to construct simple call: {:?}", err))
+                        );
+                    }
+                }
+            }
+            Err(err) => {
+                error!("failed to lock pending call for spawn, dropped: {:?}", err)
+            }
+        }
+    }
+}
+
+struct HttpcReactorWaker {
+    token: Token,
+    registration: Registration,
+    set_readiness: SetReadiness,
+}
+
+impl HttpcReactorWaker {
+    fn new(token: Token) -> Self {
+        let (registration, set_readiness) = Registration::new2();
+
+        Self { token, registration, set_readiness }
+    }
+
+    fn register(&self, poll: &mio::Poll) -> std::io::Result<()> {
+        poll.register(self, self.token.clone(),
+                      Ready::readable(), mio::PollOpt::level())
+    }
+
+    fn trigger(&self) -> io::Result<()> {
+        self.set_readiness.set_readiness(Ready::readable())
+    }
+
+    fn clear(&self) -> io::Result<()> {
+        self.set_readiness.set_readiness(Ready::empty())
+    }
+}
+
+impl Evented for HttpcReactorWaker {
+    fn register(&self, poll: &mio::Poll, token: Token, interest: Ready, opts: PollOpt) -> std::io::Result<()> {
+        self.registration.register(poll, token, interest, opts)
+    }
+
+    fn reregister(&self, poll: &mio::Poll, token: Token, interest: Ready, opts: PollOpt) -> std::io::Result<()> {
+        self.registration.reregister(poll, token, interest, opts)
+    }
+
+    fn deregister(&self, poll: &mio::Poll) -> std::io::Result<()> {
+        self.registration.deregister(poll)
+    }
 }
 
 pub(crate) struct HttpcCall {
+    builder: Option<CallBuilder>,
     call: Option<SimpleCall>,
     err: Option<Error>,
     waker: Option<Waker>,
 }
 
 impl HttpcCall {
-    pub(crate) fn new(call: SimpleCall) -> Self {
-        Self { call: Some(call), err: None, waker: None }
+    fn new(builder: CallBuilder) -> Self {
+        Self {
+            builder: Some(builder),
+            call: None,
+            err: None,
+            waker: None,
+        }
     }
 
-    pub(crate) fn new_for_error(err: Error) -> Self {
-        Self { call: None, err: Some(err), waker: None }
+    pub(crate) fn from_error(err: Error) -> Self {
+        Self {
+            builder: None,
+            call: None,
+            err: Some(err),
+            waker: None,
+        }
     }
 
-    pub(crate) fn ready(&mut self, htp: &mut Httpc, poll: &mut mio::Poll) -> bool {
+    fn ready(&mut self, htp: &mut Httpc, poll: &mut mio::Poll) -> bool {
         let mut completed = true;
-
         if let Some(call) = self.call.as_mut() {
             match call.perform(htp, poll) {
                 Ok(true) => {
@@ -102,7 +217,7 @@ impl HttpcCall {
                 }
                 Ok(false) => {
                     completed = false
-                },
+                }
                 Err(err) => {
                     self.err = Some(
                         Error::new_with_kind(ErrorKind::HttpClientError,
@@ -120,7 +235,7 @@ impl HttpcCall {
         completed
     }
 
-    pub(crate) fn abort(&mut self, htp: &mut Httpc) {
+    fn abort(&mut self, htp: &mut Httpc) {
         if self.err.is_none() {
             self.err = Some(
                 Error::new_with_kind(ErrorKind::HttpClientTimedOut,
@@ -135,12 +250,20 @@ impl HttpcCall {
 
 #[derive(Clone)]
 pub(crate) struct HttpcCallFuture {
-    state: Arc<SgxMutex<HttpcCall>>
+    state: Arc<SgxMutex<HttpcCall>>,
 }
 
 impl HttpcCallFuture {
     fn new(state: Arc<SgxMutex<HttpcCall>>) -> Self {
         Self { state }
+    }
+
+    pub(crate) fn from_error(err: Error) -> Self {
+        Self {
+            state: Arc::new(SgxMutex::new(
+                HttpcCall::from_error(err)
+            ))
+        }
     }
 }
 
@@ -152,9 +275,12 @@ impl Future for HttpcCallFuture {
 
         if let Some(err) = state.err.take() {
             return Poll::Ready(Err(err));
-        } else if let Some(call) = state.call.as_ref() {
-            if call.is_done() {
-                return Poll::Ready(Ok(state.call.take().unwrap().finish()));
+        }
+        if state.builder.is_none() {
+            if let Some(call) = state.call.as_ref() {
+                if call.is_done() {
+                    return Poll::Ready(Ok(state.call.take().unwrap().finish()));
+                }
             }
         }
 
