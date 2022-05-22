@@ -84,13 +84,13 @@ impl HttpcReactor {
                     return;
                 }
             }
-
-            warn!("handle_event[{:?}]: CALL NOT FOUND", token.clone());
         }
     }
 
     pub(crate) fn check_timeouts(&mut self, _poll: &mut mio::Poll) {
         for cref in self.httpc.timeout().into_iter() {
+            trace!("check_timeouts: time out for {:?}", cref);
+
             if self.calls.contains_key(&cref) {
                 self.calls.remove(&cref)
                     .unwrap()
@@ -244,6 +244,10 @@ impl HttpcCall {
 
         if self.call.is_some() {
             self.call.take().unwrap().abort(htp);
+        }
+
+        if let Some(waker) = self.waker.take() {
+            waker.wake();
         }
     }
 }
