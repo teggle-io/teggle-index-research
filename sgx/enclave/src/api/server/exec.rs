@@ -3,14 +3,15 @@ use core::future::Future;
 use core::ops::Add;
 use core::task::Context;
 
-use futures::{FutureExt};
 use futures::future::BoxFuture;
+use futures::FutureExt;
 use futures::task::{ArcWake, waker_ref};
 use mio::{Poll, PollOpt, Ready, Registration, SetReadiness, Token};
-use mio::event::{Evented};
+use mio::event::Evented;
 use std::collections::HashMap;
 use std::sync::SgxMutex;
 use std::time::Instant;
+
 use crate::api::server::config::Config;
 
 pub(crate) struct ExecReactor {
@@ -41,8 +42,8 @@ impl ExecReactor {
         }
 
         self.tasks.insert(token, Arc::new(Task::new(
-            token, SgxMutex::new(Some(future)),
-            Instant::now().add(self.config.exec_timeout())
+            SgxMutex::new(Some(future)),
+            Instant::now().add(self.config.exec_timeout()),
         )));
         self.tasks.get_mut(&token).unwrap().start(poll, token.clone());
 
@@ -50,44 +51,48 @@ impl ExecReactor {
     }
 
     pub(crate) fn ready(&mut self, poll: &mut mio::Poll, token: mio::Token) {
-        if !self.tasks.contains_key(&token) {
-            trace!("ready[{:?}]: TASK MISSING", token);
-        }
+        if let Some(task) = self.tasks.remove(&token) {
+            task.reset_readiness();
 
-        let task = self.tasks.remove(&token)
-            .unwrap();
-        task.reset_readiness();
+            let mut future_slot = task.future.lock().unwrap();
 
-        let mut future_slot = task.future.lock().unwrap();
-        match future_slot.take() {
-            Some(mut future) => {
-                let waker = waker_ref(&task);
-                let context = &mut Context::from_waker(&*waker);
-                if future.as_mut().poll(context).is_pending() {
-                    trace!("ready[{:?}]: PENDING", token);
-                    *future_slot = Some(future);
+            match future_slot.take() {
+                Some(mut future) => {
+                    let waker = waker_ref(&task);
+                    let context = &mut Context::from_waker(&*waker);
+                    if future.as_mut().poll(context).is_pending() {
+                        trace!("ready[{:?}]: PENDING", token);
+                        *future_slot = Some(future);
 
-                    self.tasks.insert(token.clone(), task.clone());
-                    task.reregister(poll, token, Ready::readable(),
-                                    mio::PollOpt::level() | mio::PollOpt::oneshot())
-                        .unwrap();
-                } else {
-                    trace!("ready[{:?}]: COMPLETE", token);
+                        self.tasks.insert(token.clone(), task.clone());
+                        task.reregister(poll, token, Ready::readable(),
+                                        mio::PollOpt::level() | mio::PollOpt::oneshot())
+                            .unwrap();
+                    } else {
+                        trace!("ready[{:?}]: COMPLETE", token);
+                    }
+                }
+                None => {
+                    trace!("ready[{:?}]: NO FUTURE", token);
                 }
             }
-            None => {
-                trace!("ready[{:?}]: NO FUTURE", token);
-            }
+        } else {
+            trace!("ready[{:?}]: TASK MISSING", token);
         }
     }
 
-    pub(crate) fn check_timeouts(&mut self, _poll: &mut mio::Poll) {
-        // TODO:
+    pub(crate) fn check_timeouts(&mut self, _poll: &mut mio::Poll, now: &Instant) {
+        for (token, _task) in self.tasks
+            .drain_filter(|_, t| t.check_deadline(&now)) {
+            trace!("check_timeouts[{:?}]: TIME OUT", token);
+
+            // No further actions. Cannot surface errors here to future.
+            // TODO: Can this be improved?
+        }
     }
 }
 
 struct Task {
-    token: mio::Token,
     future: SgxMutex<Option<BoxFuture<'static, ()>>>,
     registration: Registration,
     set_readiness: SetReadiness,
@@ -96,18 +101,17 @@ struct Task {
 
 impl Task {
     fn new(
-        token: mio::Token,
         future: SgxMutex<Option<BoxFuture<'static, ()>>>,
-        deadline: Instant
+        deadline: Instant,
     ) -> Self {
         let (registration, set_readiness) = Registration::new2();
 
-        Self { token, future, registration, set_readiness, deadline }
+        Self { future, registration, set_readiness, deadline }
     }
 
     fn start(&self, poll: &Poll, token: mio::Token) {
         self.register(poll, token, Ready::readable(),
-                        mio::PollOpt::level() | mio::PollOpt::oneshot())
+                      mio::PollOpt::level() | mio::PollOpt::oneshot())
             .unwrap();
         self.set_ready();
     }
@@ -122,6 +126,10 @@ impl Task {
         if let Err(err) = self.set_readiness.set_readiness(Ready::empty()) {
             warn!("Task->reset_readiness failed: {:?}", err);
         }
+    }
+
+    fn check_deadline(&self, now: &Instant) -> bool {
+        now.gt(&self.deadline)
     }
 }
 

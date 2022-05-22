@@ -22,7 +22,9 @@ const MAX_BYTES_RECEIVED: usize = 50 * 1024;
 // System default for now.
 const KEEPALIVE_DURATION: Duration = Duration::from_secs(7200);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-const EXEC_TIMEOUT: Duration = Duration::from_secs(10);
+// Currently the exec deadlines cannot be surfaced to the future
+// their main purpose is to release some system resources.
+const EXEC_TIMEOUT: Duration = Duration::from_secs(30);
 
 const TCP_BACKLOG: i32 = 1024;
 
@@ -133,7 +135,7 @@ impl Server {
         }
 
         match self.exec.lock() {
-            Ok(mut exec) => exec.check_timeouts(poll),
+            Ok(mut exec) => exec.check_timeouts(poll, &now),
             Err(err) => {
                 error!("failed to acquire lock on 'exec' when checking timeouts: {:?}", err);
             }

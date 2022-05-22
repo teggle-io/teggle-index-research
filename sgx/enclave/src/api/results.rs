@@ -44,8 +44,6 @@ pub(crate) enum ErrorKind {
     PayloadTooLarge,
     // Exec Error.
     ExecError,
-    // Exec Timed out.
-    ExecTimedOut,
     // Http Client Error.
     HttpClientError,
     // Http Client Timed out.
@@ -61,7 +59,6 @@ impl Display for ErrorKind {
             ErrorKind::TimedOut => write!(f, "TimedOut"),
             ErrorKind::PayloadTooLarge => write!(f, "PayloadTooLarge"),
             ErrorKind::ExecError => write!(f, "ExecError"),
-            ErrorKind::ExecTimedOut => write!(f, "ExecTimedOut"),
             ErrorKind::HttpClientError => write!(f, "HttpClientError"),
             ErrorKind::HttpClientTimedOut => write!(f, "HttpClientTimedOut"),
         }
@@ -94,7 +91,6 @@ impl Error {
             ErrorKind::TimedOut => StatusCode::REQUEST_TIMEOUT,
             ErrorKind::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             ErrorKind::ExecError => StatusCode::BAD_GATEWAY,
-            ErrorKind::ExecTimedOut => StatusCode::GATEWAY_TIMEOUT,
             ErrorKind::HttpClientError => StatusCode::BAD_GATEWAY,
             ErrorKind::HttpClientTimedOut => StatusCode::GATEWAY_TIMEOUT,
         }
