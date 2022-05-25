@@ -140,46 +140,51 @@ impl Server {
         let token = event.token();
         let token_us: usize = usize::from(token);
 
-        if token_us >= MIO_HTTPC_OFFSET {
-            match self.httpc.lock() {
-                Ok(mut httpc) => httpc.handle_event(poll, event),
-                Err(err) => {
-                    error!("failed to acquire lock on 'httpc' when handling event: {:?}", err);
-                }
-            }
-        } else if token_us >= MIO_EXEC_OFFSET {
-            match self.exec.lock() {
-                Ok(mut exec) => exec.ready(poll, event.token()),
-                Err(err) => {
-                    error!("failed to acquire lock on 'exec' when handling event: {:?}", err);
-                }
-            }
-        } else if token_us >= MIO_SERVER_OFFSET {
-            if self.connections.contains_key(&token) {
-                self.connections
-                    .get_mut(&token)
-                    .unwrap()
-                    .ready(poll, event);
+        match token {
+            DEFERRAL_TOKEN => {
+                let pending = match self.deferral.lock() {
+                    Ok(mut deferral) =>
+                        Some(deferral.take_pending()),
+                    Err(err) => {
+                        error!("failed to acquire lock on 'deferral' when handling event: {:?}", err);
+                        None
+                    }
+                };
 
-                if self.connections[&token].is_closed() {
-                    self.connections.remove(&token);
+                if let Some(pending) = pending {
+                    self.run(poll, pending);
                 }
             }
-        } else if token.eq(&DEFERRAL_TOKEN) {
-            let pending = match self.deferral.lock() {
-                Ok(mut deferral) =>
-                    Some(deferral.take_pending()),
-                Err(err) => {
-                    error!("failed to acquire lock on 'deferral' when handling event: {:?}", err);
-                    None
-                }
-            };
+            _ => {
+                if token_us >= MIO_HTTPC_OFFSET {
+                    match self.httpc.lock() {
+                        Ok(mut httpc) => httpc.handle_event(poll, event),
+                        Err(err) => {
+                            error!("failed to acquire lock on 'httpc' when handling event: {:?}", err);
+                        }
+                    }
+                } else if token_us >= MIO_EXEC_OFFSET {
+                    match self.exec.lock() {
+                        Ok(mut exec) => exec.ready(poll, event.token()),
+                        Err(err) => {
+                            error!("failed to acquire lock on 'exec' when handling event: {:?}", err);
+                        }
+                    }
+                } else if token_us >= MIO_SERVER_OFFSET {
+                    if self.connections.contains_key(&token) {
+                        self.connections
+                            .get_mut(&token)
+                            .unwrap()
+                            .ready(poll, event);
 
-            if let Some(pending) = pending {
-                self.run(poll, pending);
+                        if self.connections[&token].is_closed() {
+                            self.connections.remove(&token);
+                        }
+                    }
+                } else {
+                    warn!("unhandled token: {}", token_us);
+                }
             }
-        } else {
-            warn!("unhandled token: {}", token_us);
         }
     }
 

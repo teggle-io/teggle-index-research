@@ -41,12 +41,10 @@ impl HttpCodec {
             item.status(),
             self.server,
             item.body().len(),
-            "TODO"
+            date::now()
         ).map_err(|e| {
             Error::new_with_kind(ErrorKind::EncodeFault, e.to_string())
         })?;
-
-        //date::now()
 
         for (k, v) in item.headers() {
             dst.extend_from_slice(k.as_str().as_bytes());
@@ -147,7 +145,7 @@ impl fmt::Write for BytesWrite<'_> {
     }
 }
 
-/*
+
 mod date {
     use std::cell::RefCell;
     use std::fmt::{self, Write};
@@ -234,5 +232,3 @@ mod date {
         }
     }
 }
-
- */

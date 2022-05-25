@@ -34,9 +34,9 @@ serde_json = { git = "https://github.com/mesalock-linux/serde-json-sgx.git" }
 bytes = { git = "https://github.com/mesalock-linux/bytes-sgx.git" }
 http = { git = "https://github.com/teggle-io/http-sgx.git" }
 httparse = { git = "https://github.com/teggle-io/httparse-sgx.git" }
+httpdate = { git = "https://github.com/teggle-io/httpdate-sgx.git" }
 mio = { git = "https://github.com/mesalock-linux/mio-sgx.git", branch = "v0.6_sgx_1.1.3" }
-#mio_httpc = { git = "https://github.com/teggle-io/mio_httpc_sgx.git", branch = "v0.6_sgx_1.1.3", features = ["mesalock_sgx", "rtls"] }
-mio_httpc = { path = "../../../mio_httpc_sgx", features = ["mesalock_sgx", "rtls"] }
+mio_httpc = { git = "https://github.com/teggle-io/mio_httpc_sgx.git", branch = "v0.6_sgx_1.1.3", features = ["mesalock_sgx", "rtls"] }
 net2 = { git = "https://github.com/mesalock-linux/net2-rs-sgx.git" }
 futures = { git = "https://github.com/mesalock-linux/futures-rs-sgx.git" }
 

@@ -48,6 +48,7 @@ extern crate net2;
 extern crate futures;
 extern crate http;
 extern crate httparse;
+extern crate httpdate;
 extern crate bytes;
 extern crate serde;
 #[macro_use]
