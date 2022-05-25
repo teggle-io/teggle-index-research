@@ -6,7 +6,7 @@ use http::StatusCode;
 pub(crate) type EncodedResponseResult = Result<ResponseBody, Error>;
 
 #[derive(Clone)]
-pub(crate) struct ResponseBody {
+pub struct ResponseBody {
     body: Vec<u8>,
     close: bool
 }
@@ -39,7 +39,7 @@ impl ResponseBody {
 }
 
 #[derive(Debug, Copy, Clone)]
-pub(crate) enum ErrorKind {
+pub enum ErrorKind {
     // Encode fault.
     EncodeFault,
     // Decode fault.
@@ -74,7 +74,7 @@ impl Display for ErrorKind {
 }
 
 #[derive(Debug)]
-pub(crate) struct Error {
+pub struct Error {
     message: String,
     kind: ErrorKind,
 }

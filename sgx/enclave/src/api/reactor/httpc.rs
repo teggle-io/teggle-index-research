@@ -210,7 +210,7 @@ impl HttpcCall {
 }
 
 #[derive(Clone)]
-pub(crate) struct HttpcCallFuture {
+pub struct HttpcCallFuture {
     state: Arc<SgxMutex<HttpcCall>>,
 }
 
