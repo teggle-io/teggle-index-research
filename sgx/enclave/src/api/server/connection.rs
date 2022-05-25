@@ -20,10 +20,10 @@ use crate::api::{
     handler::response::Response,
     results::{Error, ErrorKind, ResponseBody},
     server::config::Config,
+    reactor::deferral::DeferralReactor,
+    reactor::exec::ExecReactor,
+    reactor::httpc::HttpcReactor
 };
-use crate::api::reactor::deferral::DeferralReactor;
-use crate::api::reactor::exec::ExecReactor;
-use crate::api::reactor::httpc::HttpcReactor;
 
 pub(crate) static UPGRADE_OPT_KEEPALIVE: u8 = 2;
 

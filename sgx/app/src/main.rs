@@ -18,7 +18,7 @@
 extern crate sgx_types;
 extern crate sgx_urts;
 extern crate enclave_ffi_types;
-extern crate lazy_static;
+#[macro_use] extern crate lazy_static;
 extern crate parking_lot;
 extern crate rocksdb;
 
@@ -48,9 +48,10 @@ extern {
 #[allow(dead_code)]
 fn run_perform_test() {
     let enclave_access_token = ENCLAVE_DOORBELL
-        .get_access(false) // This can never be recursive
-        .expect("failed to get access token (1)"); // TODO: remove expect
-    let enclave = enclave_access_token.expect("failed to get access token (2)");
+        .get_access(false)
+        .expect("failed to get enclave access token");
+    let enclave = enclave_access_token
+        .expect("failed to get enclave");
 
     let mut retval = sgx_status_t::SGX_SUCCESS;
 

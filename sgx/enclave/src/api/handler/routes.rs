@@ -24,7 +24,7 @@ fn build_routes() -> Router {
 
     r.route("/test", |mut r| {
         r.require(|req, res, ctx, next| Box::pin(async move {
-            info!("inside test");
+            //info!("inside test");
             ctx.insert("test", "value");
 
             next(req, res, ctx).await

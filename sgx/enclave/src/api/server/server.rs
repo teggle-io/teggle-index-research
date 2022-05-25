@@ -1,5 +1,6 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use core::time::Duration;
 
 use mio::event::Event;
@@ -18,6 +19,10 @@ use crate::api::results::Error;
 use crate::api::server::config::Config;
 use crate::api::server::connection::Connection;
 
+lazy_static!(
+    pub static ref SERVER_ID_SEQ: AtomicUsize = AtomicUsize::new(0);
+);
+
 const LISTENER: Token = Token(0);
 const DEFERRAL_TOKEN: Token = Token(5);
 
@@ -30,7 +35,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 // their main purpose is to release some system resources.
 const EXEC_TIMEOUT: Duration = Duration::from_secs(7200);
 
-const TCP_BACKLOG: i32 = 1024;
+const TCP_BACKLOG: i32 = 250;
 
 const MIO_EVENTS_CAPACITY: usize = TCP_BACKLOG as usize * 2;
 const MIO_TIMEOUT_POLL: Duration = Duration::from_millis(1000);
@@ -40,6 +45,7 @@ const MIO_EXEC_OFFSET: usize = MIO_SERVER_OFFSET + u32::MAX as usize;
 const MIO_HTTPC_OFFSET: usize = MIO_EXEC_OFFSET + u32::MAX as usize;
 
 pub(crate) struct Server {
+    id: usize,
     server: TcpListener,
     connections: HashMap<Token, Connection>,
     config: Arc<Config>,
@@ -61,6 +67,7 @@ impl Server {
                 MIO_HTTPC_OFFSET, None)));
 
         Self {
+            id: SERVER_ID_SEQ.fetch_add(1, Ordering::SeqCst),
             server,
             connections: HashMap::new(),
             config: config.clone(),
@@ -102,7 +109,7 @@ impl Server {
     fn accept(&mut self, poll: &mut mio::Poll) -> bool {
         match self.server.accept() {
             Ok((socket, addr)) => {
-                debug!("accepted connection: {}", addr);
+                debug!("[{}] accepted connection: {}", self.id, addr);
 
                 let session = rustls::ServerSession::new(
                     &self.config.tls_config().clone());
@@ -207,7 +214,7 @@ impl Server {
     pub(crate) fn run(
         &mut self,
         poll: &mut mio::Poll,
-        runs: Vec<(Token, Arc<dyn Send + Sync + for<'a> Fn(&'a mut Connection) -> Result<(), Error>>)>
+        runs: Vec<(Token, Arc<dyn Send + Sync + for<'a> Fn(&'a mut Connection) -> Result<(), Error>>)>,
     ) {
         for (conn_id, run) in runs {
             self.run_on_connection(poll, conn_id, run);
@@ -218,7 +225,7 @@ impl Server {
         &mut self,
         poll: &mut mio::Poll,
         conn_id: Token,
-        run: Arc<dyn Send + Sync + for<'a> Fn(&'a mut Connection) -> Result<(), Error>>
+        run: Arc<dyn Send + Sync + for<'a> Fn(&'a mut Connection) -> Result<(), Error>>,
     ) {
         if self.connections.contains_key(&conn_id) {
             self.connections
@@ -253,6 +260,8 @@ pub(crate) fn start_api_server(addr: &str) {
         MIO_EVENTS_CAPACITY);
 
     server.register(&mut poll).unwrap();
+
+    info!("🚀 [{}] Starting API server ({})", server.id, &addr);
 
     'outer: loop {
         poll.poll(&mut events, Some(MIO_TIMEOUT_POLL))

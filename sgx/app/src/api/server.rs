@@ -7,9 +7,7 @@ use sgx_types::*;
 use crate::enclave::ecall::api::ecall_api_server_start;
 use crate::ENCLAVE_DOORBELL;
 
-// TODO:
-//const THREAD_NUM: u8 = 8;
-const THREAD_NUM: u8 = 1;
+const THREAD_NUM: u8 = 8;
 
 pub(crate) fn start_api_service(addr: String) {
     let mut children = vec![];
@@ -21,8 +19,6 @@ pub(crate) fn start_api_service(addr: String) {
         let addr = addr.clone();
 
         children.push(thread::spawn(move || {
-            info!("🚀 Starting API server ({}) [{:?}]", &addr, thread::current().id());
-
             let enclave_access_token = ENCLAVE_DOORBELL
                 .get_access(false) // This can never be recursive
                 .unwrap();

@@ -36,7 +36,7 @@ extern crate pretty_env_logger;
 extern crate alloc;
 extern crate blake2;
 extern crate digest;
-extern crate lazy_static;
+#[macro_use] extern crate lazy_static;
 extern crate ring;
 extern crate sha2;
 extern crate uuid;

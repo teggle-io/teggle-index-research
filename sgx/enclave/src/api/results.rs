@@ -17,6 +17,14 @@ impl ResponseBody {
         Self { body, close: false }
     }
 
+    #[allow(dead_code)]
+    pub fn dummy() -> Self {
+        Self {
+            body: b"HTTP/1.1 200 OK\r\nServer: index.teggle.io/v1beta1\r\nContent-Length: 18\r\nDate: TODO\r\ncontent-type: application/json\r\n\r\n{\"message\":\"PONG\"}".to_vec(),
+            close: true
+        }
+    }
+
     pub fn new_with_close(body: Vec<u8>, close: bool) -> Self {
         Self { body, close }
     }
