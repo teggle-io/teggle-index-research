@@ -5,7 +5,7 @@ use mio_httpc::CallBuilder;
 use std::collections::HashMap;
 use std::sync::SgxMutex;
 use crate::api::results::{Error, ErrorKind};
-use crate::api::server::httpc::{HttpcCallFuture, HttpcReactor};
+use crate::api::reactor::httpc::{HttpcCallFuture, HttpcReactor};
 
 pub(crate) struct Context {
     data: HashMap<String, String>,
@@ -27,12 +27,22 @@ impl Context {
         match self.httpc.lock() {
             Ok(mut lock) => {
                 let mut builder = CallBuilder::get();
-                builder.timeout_ms(5000).https()
+
+                builder.timeout_ms(5000).host("172.17.0.1");
+
+                /*
+                  builder.timeout_ms(5000).https()
+                    .host("catfact.ninja")
+                    .path_segm("fact");
+
+                  builder.timeout_ms(120000).https()
                     .host("gorest.co.in")
                     .path_segm("public")
                     .path_segm("v2")
                     .path_segm("posts")
                     .path_segm("1902");
+
+                 */
 
                 lock.call(builder)
             }

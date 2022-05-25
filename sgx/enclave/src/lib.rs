@@ -54,7 +54,6 @@ extern crate serde;
 extern crate serde_derive;
 extern crate serde_json;
 
-
 use blake2::VarBlake2b;
 use blake2::digest::{Input, VariableOutput};
 use digest::FixedOutput;

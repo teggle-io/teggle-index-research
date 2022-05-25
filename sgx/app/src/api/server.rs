@@ -7,7 +7,9 @@ use sgx_types::*;
 use crate::enclave::ecall::api::ecall_api_server_start;
 use crate::ENCLAVE_DOORBELL;
 
-const THREAD_NUM: u8 = 8;
+// TODO:
+//const THREAD_NUM: u8 = 8;
+const THREAD_NUM: u8 = 1;
 
 pub(crate) fn start_api_service(addr: String) {
     let mut children = vec![];

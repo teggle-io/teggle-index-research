@@ -5,20 +5,21 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
 
-use mio::{PollOpt, Ready, Registration, SetReadiness, Token};
-use mio::event::{Event, Evented};
-use mio_httpc::{CallBuilder, CallRef, Httpc, HttpcCfg, Response, SimpleCall};
+use mio::{Token};
+use mio::event::{Event};
 use std::collections::HashMap;
-use std::io;
 use std::sync::SgxMutex;
 
+use mio_httpc::{CallBuilder, CallRef, Httpc, HttpcCfg, Response, SimpleCall};
+
+use crate::api::reactor::waker::ReactorWaker;
 use crate::api::results::{Error, ErrorKind};
 
 pub(crate) struct HttpcReactor {
     httpc: Httpc,
     calls: HashMap<CallRef, Arc<SgxMutex<HttpcCall>>>,
     pending: Vec<Arc<SgxMutex<HttpcCall>>>,
-    waker: HttpcReactorWaker,
+    waker: ReactorWaker,
 }
 
 impl HttpcReactor {
@@ -29,7 +30,7 @@ impl HttpcReactor {
         Self {
             httpc: Httpc::new(con_offset + 1, cfg),
             calls: HashMap::new(),
-            waker: HttpcReactorWaker::new(Token(con_offset)),
+            waker: ReactorWaker::new(Token(con_offset)),
             pending: Vec::new(),
         }
     }
@@ -45,7 +46,7 @@ impl HttpcReactor {
 
         self.pending.push(call.clone());
         if let Err(err) = self.waker.trigger() {
-            warn!("HTTPC reactor failed to trigger waker: {:?}", err)
+            warn!("HttpcReactor failed to trigger waker: {:?}", err)
         }
 
         HttpcCallFuture::new(call)
@@ -53,12 +54,12 @@ impl HttpcReactor {
 
     pub(crate) fn handle_event(&mut self, poll: &mut mio::Poll, event: &Event) {
         let token = event.token();
-        if token.eq(&self.waker.token) {
+        if token.eq(&self.waker.token()) {
             trace!("handle_event[{:?}]: CHECK PENDING", token.clone());
 
             // Clear the waker readiness state prior to removing pending items.
             if let Err(err) = self.waker.clear() {
-                warn!("HTTPC reactor failed to clear waker: {:?}", err)
+                warn!("HttpcReactor failed to clear waker: {:?}", err)
             }
 
             let pending = std::mem::take(&mut self.pending);
@@ -69,7 +70,7 @@ impl HttpcReactor {
         } else {
             if let Some(cref) = self.httpc.event(&event) {
                 if self.calls.contains_key(&cref) {
-                    trace!("handle_event[{:?}]: READY", token.clone());
+                    trace!("handle_event[{:?}]: READY ({:?})", token.clone(), event.readiness());
 
                     if self.calls.get_mut(&cref)
                         .unwrap()
@@ -81,6 +82,8 @@ impl HttpcReactor {
                         self.calls.remove(&cref);
                     }
 
+                    trace!("handle_event[{:?}]: WAIT", token.clone());
+
                     return;
                 }
             }
@@ -91,10 +94,8 @@ impl HttpcReactor {
         for cref in self.httpc.timeout().into_iter() {
             trace!("check_timeouts: time out for {:?}", cref);
 
-            if self.calls.contains_key(&cref) {
-                self.calls.remove(&cref)
-                    .unwrap()
-                    .lock()
+            if let Some(call) = self.calls.remove(&cref) {
+                call.lock()
                     .unwrap()
                     .abort(&mut self.httpc);
             }
@@ -108,77 +109,33 @@ impl HttpcReactor {
                 if lock.err.is_some() {
                     return;
                 }
-                if lock.builder.is_none() {
+
+                if let Some(mut builder) = lock.builder.take() {
+                    match builder.simple_call(&mut self.httpc, poll) {
+                        Ok(inner_call) => {
+                            let cref = inner_call.call().get_ref().clone();
+                            lock.call = Some(inner_call);
+
+                            self.calls.insert(cref, call.clone());
+                        }
+                        Err(err) => {
+                            lock.err = Some(
+                                Error::new_with_kind(ErrorKind::HttpClientError,
+                                                     format!("failed to construct simple call: {:?}", err))
+                            );
+                        }
+                    }
+                } else {
                     lock.err = Some(
                         Error::new_with_kind(ErrorKind::HttpClientError,
                                              format!("failed to spawn HTTPC call, missing builder"))
                     );
-                    return;
-                }
-
-                match lock.builder
-                    .take()
-                    .unwrap()
-                    .simple_call(&mut self.httpc, poll) {
-                    Ok(inner_call) => {
-                        let cref = inner_call.call().get_ref().clone();
-                        lock.call = Some(inner_call);
-
-                        self.calls.insert(cref, call.clone());
-                    }
-                    Err(err) => {
-                        lock.err = Some(
-                            Error::new_with_kind(ErrorKind::HttpClientError,
-                                                 format!("failed to construct simple call: {:?}", err))
-                        );
-                    }
                 }
             }
             Err(err) => {
                 error!("failed to lock pending call for spawn, dropped: {:?}", err)
             }
         }
-    }
-}
-
-struct HttpcReactorWaker {
-    token: Token,
-    registration: Registration,
-    set_readiness: SetReadiness,
-}
-
-impl HttpcReactorWaker {
-    fn new(token: Token) -> Self {
-        let (registration, set_readiness) = Registration::new2();
-
-        Self { token, registration, set_readiness }
-    }
-
-    fn register(&self, poll: &mio::Poll) -> std::io::Result<()> {
-        poll.register(self, self.token.clone(),
-                      Ready::readable(), mio::PollOpt::level())
-    }
-
-    fn trigger(&self) -> io::Result<()> {
-        self.set_readiness.set_readiness(Ready::readable())
-    }
-
-    fn clear(&self) -> io::Result<()> {
-        self.set_readiness.set_readiness(Ready::empty())
-    }
-}
-
-impl Evented for HttpcReactorWaker {
-    fn register(&self, poll: &mio::Poll, token: Token, interest: Ready, opts: PollOpt) -> std::io::Result<()> {
-        self.registration.register(poll, token, interest, opts)
-    }
-
-    fn reregister(&self, poll: &mio::Poll, token: Token, interest: Ready, opts: PollOpt) -> std::io::Result<()> {
-        self.registration.reregister(poll, token, interest, opts)
-    }
-
-    fn deregister(&self, poll: &mio::Poll) -> std::io::Result<()> {
-        self.registration.deregister(poll)
     }
 }
 
@@ -213,7 +170,7 @@ impl HttpcCall {
         if let Some(call) = self.call.as_mut() {
             match call.perform(htp, poll) {
                 Ok(true) => {
-                    // Handled by Future.
+                    // Handled by future.
                 }
                 Ok(false) => {
                     completed = false

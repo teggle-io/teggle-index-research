@@ -18,7 +18,7 @@ use crate::api::handler::response::Response;
 use crate::api::handler::router::route_request;
 use crate::api::results::{EncodedResponseResult, Error, ErrorKind};
 use crate::api::server::connection::{UPGRADE_OPT_KEEPALIVE};
-use crate::api::server::httpc::HttpcReactor;
+use crate::api::reactor::httpc::HttpcReactor;
 
 static CONN_KEEPALIVE: &str = "keep-alive";
 

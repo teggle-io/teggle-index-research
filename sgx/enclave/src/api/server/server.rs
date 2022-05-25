@@ -1,4 +1,5 @@
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::time::Duration;
 
 use mio::event::Event;
@@ -10,12 +11,15 @@ use std::collections::HashMap;
 use std::sync::SgxMutex;
 use std::time::Instant;
 
+use crate::api::reactor::deferral::DeferralReactor;
+use crate::api::reactor::exec::ExecReactor;
+use crate::api::reactor::httpc::HttpcReactor;
+use crate::api::results::Error;
 use crate::api::server::config::Config;
-use crate::api::server::connection::{Connection, TlsSession};
-use crate::api::server::exec::ExecReactor;
-use crate::api::server::httpc::HttpcReactor;
+use crate::api::server::connection::Connection;
 
 const LISTENER: Token = Token(0);
+const DEFERRAL_TOKEN: Token = Token(5);
 
 // 50 Kb
 const MAX_BYTES_RECEIVED: usize = 50 * 1024;
@@ -24,7 +28,7 @@ const KEEPALIVE_DURATION: Duration = Duration::from_secs(7200);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 // Currently the exec deadlines cannot be surfaced to the future
 // their main purpose is to release some system resources.
-const EXEC_TIMEOUT: Duration = Duration::from_secs(30);
+const EXEC_TIMEOUT: Duration = Duration::from_secs(7200);
 
 const TCP_BACKLOG: i32 = 1024;
 
@@ -39,6 +43,7 @@ pub(crate) struct Server {
     server: TcpListener,
     connections: HashMap<Token, Connection>,
     config: Arc<Config>,
+    deferral: Arc<SgxMutex<DeferralReactor>>,
     exec: Arc<SgxMutex<ExecReactor>>,
     httpc: Arc<SgxMutex<HttpcReactor>>,
     next_id: usize,
@@ -47,6 +52,8 @@ pub(crate) struct Server {
 
 impl Server {
     fn new(server: TcpListener, config: Arc<Config>) -> Self {
+        let deferral = Arc::new(
+            SgxMutex::new(DeferralReactor::new(DEFERRAL_TOKEN)));
         let exec = Arc::new(
             SgxMutex::new(ExecReactor::new(MIO_EXEC_OFFSET, config.clone())));
         let httpc = Arc::new(
@@ -57,6 +64,7 @@ impl Server {
             server,
             connections: HashMap::new(),
             config: config.clone(),
+            deferral,
             exec,
             httpc,
             next_id: MIO_SERVER_OFFSET,
@@ -65,10 +73,19 @@ impl Server {
     }
 
     pub(crate) fn register(&mut self, poll: &mut mio::Poll) -> std::io::Result<()> {
+        match self.deferral.lock() {
+            Ok(mut deferral) => {
+                deferral.register(poll)?;
+            }
+            Err(err) => {
+                warn!("failed to acquire lock on 'deferral' during server->register: {:?}", err);
+            }
+        }
+
         match self.httpc.lock() {
             Ok(mut httpc) => {
                 httpc.register(poll)?;
-            },
+            }
             Err(err) => {
                 warn!("failed to acquire lock on 'httpc' during server->register: {:?}", err);
             }
@@ -98,12 +115,10 @@ impl Server {
                     self.next_id += 1;
                 }
 
-                let conn_session = Arc::new(SgxMutex::new(
-                    TlsSession::new(token.clone(), socket, session,
-                                    self.config.clone())
-                ));
-
-                self.connections.insert(token, Connection::new(conn_session,
+                self.connections.insert(token, Connection::new(token.clone(),
+                                                               socket, session,
+                                                               self.config.clone(),
+                                                               self.deferral.clone(),
                                                                self.exec.clone(),
                                                                self.httpc.clone()));
                 self.connections.get_mut(&token).unwrap().register(poll);
@@ -173,6 +188,47 @@ impl Server {
                 if self.connections[&token].is_closed() {
                     self.connections.remove(&token);
                 }
+            }
+        } else if token.eq(&DEFERRAL_TOKEN) {
+            let pending = match self.deferral.lock() {
+                Ok(mut deferral) =>
+                    Some(deferral.take_pending(poll, event)),
+                Err(err) => {
+                    error!("failed to acquire lock on 'deferral' when handling event: {:?}", err);
+                    None
+                }
+            };
+
+            if let Some(pending) = pending {
+                self.run(poll, pending);
+            }
+        }
+    }
+
+    pub(crate) fn run(
+        &mut self,
+        poll: &mut mio::Poll,
+        runs: Vec<(Token, Arc<dyn Send + Sync + for<'a> Fn(&'a mut Connection) -> Result<(), Error>>)>
+    ) {
+        for (conn_id, run) in runs {
+            self.run_on_connection(poll, conn_id, run);
+        }
+    }
+
+    pub(crate) fn run_on_connection(
+        &mut self,
+        poll: &mut mio::Poll,
+        conn_id: Token,
+        run: Arc<dyn Send + Sync + for<'a> Fn(&'a mut Connection) -> Result<(), Error>>
+    ) {
+        if self.connections.contains_key(&conn_id) {
+            self.connections
+                .get_mut(&conn_id)
+                .unwrap()
+                .run(poll, run);
+
+            if self.connections[&conn_id].is_closed() {
+                self.connections.remove(&conn_id);
             }
         }
     }

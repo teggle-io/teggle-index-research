@@ -2,6 +2,7 @@ use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::future::Future;
 use core::ops::Add;
 
 use log::{trace, warn};
@@ -11,7 +12,7 @@ use rustls::Session;
 use std::io;
 use std::io::{ErrorKind as StdErrorKind, Read, Write};
 use std::net::Shutdown;
-use std::sync::{SgxMutex, SgxMutexGuard};
+use std::sync::SgxMutex;
 use std::time::Instant;
 
 use crate::api::{
@@ -19,47 +20,112 @@ use crate::api::{
     handler::response::Response,
     results::{Error, ErrorKind, ResponseBody},
     server::config::Config,
-    server::exec::ExecReactor,
-    server::httpc::HttpcReactor
 };
+use crate::api::reactor::deferral::DeferralReactor;
+use crate::api::reactor::exec::ExecReactor;
+use crate::api::reactor::httpc::HttpcReactor;
 
 pub(crate) static UPGRADE_OPT_KEEPALIVE: u8 = 2;
 
 pub(crate) struct Connection {
-    session: Arc<SgxMutex<TlsSession>>,
+    token: mio::Token,
+    socket: TcpStream,
+    session: rustls::ServerSession,
+    config: Arc<Config>,
+    deferral: Arc<SgxMutex<DeferralReactor>>,
     exec: Arc<SgxMutex<ExecReactor>>,
     httpc: Arc<SgxMutex<HttpcReactor>>,
+    request: Option<RawRequest>,
+    upgraded: bool,
+    closing: bool,
+    closed: bool,
+    close_notify_sent: bool,
 }
 
 impl Connection {
     pub(crate) fn new(
-        session: Arc<SgxMutex<TlsSession>>,
+        token: mio::Token,
+        socket: TcpStream,
+        session: rustls::ServerSession,
+        config: Arc<Config>,
+        deferral: Arc<SgxMutex<DeferralReactor>>,
         exec: Arc<SgxMutex<ExecReactor>>,
         httpc: Arc<SgxMutex<HttpcReactor>>,
     ) -> Self {
         Self {
+            token,
+            socket,
             session,
+            config,
+            deferral,
             exec,
-            httpc
+            httpc,
+            request: None,
+            upgraded: false,
+            closing: false,
+            closed: false,
+            close_notify_sent: false,
         }
     }
 
-    fn handle_request(&self, session: &mut SgxMutexGuard<TlsSession>, poll: &mut mio::Poll) {
-        let config = session.config.clone();
+    pub(crate) fn ready(&mut self, poll: &mut mio::Poll, ev: &Event) {
+        if ev.readiness().is_readable() {
+            trace!("ready[{:?}]: READ", self.token);
+            self.read_tls();
+            self.handle_request(poll);
+        }
 
-        if session.is_closed() || session.is_closing() {
+        if ev.readiness().is_writable() {
+            trace!("ready[{:?}]: WRITE", self.token);
+            self.write_tls_and_handle_error();
+        }
+
+        if self.is_closing() {
+            trace!("ready[{:?}]: CLOSE", self.token);
+            self.close();
+            self.deregister(poll);
+        } else {
+            trace!("ready[{:?}]: CONTINUE", self.token);
+            self.reregister(poll);
+        }
+    }
+
+    pub(crate) fn run(&mut self, poll: &mut mio::Poll,
+                      run: Arc<dyn Send + Sync + for<'a> Fn(&'a mut Connection) -> Result<(), Error>>) {
+        trace!("run[{:?}]: RUN", self.token);
+        match run(self) {
+            Ok(_) => {}
+            Err(err) => {
+                self.handle_error(&err, true);
+            }
+        }
+
+        if self.is_closing() {
+            trace!("run[{:?}]: CLOSE", self.token);
+            self.close();
+            self.deregister(poll);
+        } else {
+            trace!("run[{:?}]: CONTINUE", self.token);
+            self.reregister(poll);
+        }
+    }
+
+    fn handle_request(&mut self, poll: &mut mio::Poll) {
+        let config = self.config.clone();
+
+        if self.is_closed() || self.is_closing() {
             return;
         }
 
         let mut bytes_read: usize = 0;
-        if let Some(req) = session.request.as_ref() {
+        if let Some(req) = self.request.as_ref() {
             bytes_read = req.len();
         }
 
         let mut request_body = Vec::new();
-        let r = session.read(&mut request_body, bytes_read);
+        let r = self.read(&mut request_body, bytes_read);
         if r == -1 {
-            session.set_closing(true);
+            self.set_closing(true);
             return;
         }
 
@@ -67,9 +133,9 @@ impl Connection {
             trace!("req body: {:?}", String::from_utf8(request_body.clone()));
 
             // Consume request body.
-            if let Some(req) = &mut session.request {
+            if let Some(req) = &mut self.request {
                 if let Err(err) = req.next(request_body) {
-                    session.handle_error(&err, false);
+                    self.handle_error(&err, false);
                     return;
                 }
             } else {
@@ -77,22 +143,22 @@ impl Connection {
                                       Instant::now()
                                           .add(config.request_timeout())) {
                     Ok(req) => {
-                        session.request = Some(req);
+                        self.request = Some(req);
                     }
                     Err(err) => {
-                        session.handle_error(&err, false);
+                        self.handle_error(&err, false);
                         return;
                     }
                 }
             }
 
-            if session.request.is_some() {
+            if self.request.is_some() {
                 let mut upgrade_opts = 0_u8;
-                if let Some(req) = session.request.as_ref() {
+                if let Some(req) = self.request.as_ref() {
                     // Check payload size.
                     if let Some(content_len) = req.content_length() {
                         if content_len > config.max_bytes_received() {
-                            session.handle_error(&too_many_bytes_err(
+                            self.handle_error(&too_many_bytes_err(
                                 content_len,
                                 config.max_bytes_received()), false);
                             return;
@@ -104,156 +170,76 @@ impl Connection {
 
                 // Upgrade connection.
                 if upgrade_opts > 0 {
-                    session.upgrade(upgrade_opts);
+                    self.upgrade(upgrade_opts);
                 }
 
-                if let Some(req) = session.request.as_ref() {
+                if let Some(req) = self.request.as_ref() {
                     // Ready?
                     if req.ready() {
-                        let req = session.request.take().unwrap();
-
-                        match self.exec.lock() {
-                            Ok(mut exec) => {
-                                let session = self.session.clone();
-                                let httpc = self.httpc.clone();
-
-                                exec.spawn(poll, async move {
-                                    match process_raw_request(httpc, req).await {
-                                        Ok(res) => {
-                                            match session.lock() {
-                                                Ok(mut session) => {
-                                                    session.send_response(res, true);
-                                                }
-                                                Err(err) => {
-                                                    error!("failed to acquire lock on 'session' when \
-                                                    handling process_raw_request->send_response: {:?}", err);
-                                                }
-                                            }
-                                        }
-                                        Err(err) => {
-                                            match session.lock() {
-                                                Ok(mut session) => {
-                                                    session.handle_error(&err, true);
-                                                }
-                                                Err(nested_err) => {
-                                                    error!("failed to acquire lock on 'session' when \
-                                                    handling process_raw_request->handle_error: {:?}, \
-                                                    origin err: {:?}", nested_err, err);
-                                                }
-                                            }
-                                        }
-                                    }
-                                });
-                            }
-                            Err(err) => {
-                                session.handle_error(&Error::new_with_kind(
-                                    ErrorKind::ExecError, err.to_string()),
-                                                     false);
-                                return;
-                            }
-                        }
+                        let req = self.request.take().unwrap();
+                        self.process_request(poll, req);
                     }
                 }
             }
         }
     }
 
-    pub(crate) fn ready(&mut self, poll: &mut mio::Poll, ev: &Event) {
-        match self.session.lock() {
-            Ok(mut session) => {
-                if ev.readiness().is_readable() {
-                    trace!("ready[{:?}]: READ", ev.token());
-                    session.read_tls();
-                    self.handle_request(&mut session, poll);
+    fn process_request(&mut self, poll: &mut mio::Poll, req: RawRequest) {
+        let conn_id = self.token.clone();
+        let deferral = self.deferral.clone();
+        let httpc = self.httpc.clone();
+
+        if let Err(err) = self.spawn(poll, async move {
+            let result = process_raw_request(httpc, req).await;
+
+            match deferral.lock() {
+                Ok(mut deferral) => {
+                    deferral.defer(conn_id, Arc::new(move |conn| {
+                        match &result {
+                            Ok(res) => {
+                                conn.send_response(res, true);
+                            }
+                            Err(err) => {
+                                conn.handle_error(&err, true);
+                            }
+                        }
+
+                        Ok(())
+                    }));
                 }
-
-                if ev.readiness().is_writable() {
-                    trace!("ready[{:?}]: WRITE", ev.token());
-                    session.write_tls_and_handle_error();
-                }
-
-                if session.is_closing() {
-                    trace!("ready[{:?}]: CLOSE", ev.token());
-                    session.close();
-                    session.deregister(poll);
-                } else {
-                    trace!("ready[{:?}]: CONTINUE", ev.token());
-                    session.reregister(poll);
+                Err(err) => {
+                    warn!("failed to acquire lock on 'deferral' \
+                    during connection->process_request: {:?}", err);
                 }
             }
-            Err(err) => {
-                error!("failed to acquire lock on 'session' when handling event: {:?}", err);
-            }
+        }) {
+            self.handle_error(&err, true);
         }
     }
 
-    pub fn register(&mut self, poll: &mut mio::Poll) {
-        match self.session.lock() {
-            Ok(session) => {
-                session.register(poll);
-            }
-            Err(err) => {
-                error!("failed to acquire lock on 'session' when calling 'register': {:?}", err);
-            }
-        }
-    }
-
-    pub fn check_timeout(&mut self, poll: &mut mio::Poll, now: &Instant) {
-        match self.session.lock() {
-            Ok(mut session) => {
-                session.check_timeout(poll, now);
+    // Spawn an async function.
+    fn spawn(&mut self, poll: &mut mio::Poll, future: impl Future<Output=()> + 'static + Send) -> Result<(), Error> {
+        match self.exec.lock() {
+            Ok(mut exec) => {
+                exec.spawn(poll, future);
             }
             Err(err) => {
-                error!("failed to acquire lock on 'session' when calling 'check_timeout': {:?}", err);
-            }
-        }
-    }
-
-    pub(crate) fn is_closed(&self) -> bool {
-        match self.session.lock() {
-            Ok(session) => {
-                return session.is_closed();
-            }
-            Err(err) => {
-                error!("failed to acquire lock on 'session' when calling 'is_closed': {:?}", err);
+                return Err(
+                    Error::new_with_kind(ErrorKind::ExecError, err.to_string())
+                );
             }
         }
 
-        false
+        Ok(())
     }
-}
 
-pub(crate) struct TlsSession {
-    token: mio::Token,
-    socket: TcpStream,
-    session: rustls::ServerSession,
-    config: Arc<Config>,
-    request: Option<RawRequest>,
-    upgraded: bool,
-    closing: bool,
-    closed: bool,
-}
-
-impl TlsSession {
-    pub(crate) fn new(
-        token: mio::Token,
-        socket: TcpStream,
-        session: rustls::ServerSession,
-        config: Arc<Config>,
-    ) -> Self {
-        Self {
-            token,
-            socket,
-            session,
-            config,
-            request: None,
-            upgraded: false,
-            closing: false,
-            closed: false,
+    // Tls Session Related
+    fn send_response(&mut self, res: &ResponseBody, push: bool) {
+        if self.is_closed() {
+            // Abort, stale connection.
+            return;
         }
-    }
 
-    fn send_response(&mut self, res: ResponseBody, push: bool) {
         let body = res.body();
 
         if body.len() > 0 {
@@ -263,7 +249,7 @@ impl TlsSession {
         self.write(&body[..]);
 
         if res.close() {
-            self.session.send_close_notify();
+            self.send_close_notify();
         }
         if push {
             self.write_tls_and_handle_error();
@@ -274,6 +260,11 @@ impl TlsSession {
     }
 
     fn handle_io_error(&mut self, err: io::Error) {
+        if self.is_closed() {
+            // Abort, stale connection.
+            return;
+        }
+
         if let Some(err) = err.into_inner() {
             let inner: Option<&Box<Error>> = err.as_ref().downcast_ref();
             if inner.is_some() {
@@ -283,12 +274,17 @@ impl TlsSession {
     }
 
     fn handle_error(&mut self, err: &Error, push: bool) {
+        if self.is_closed() {
+            // Abort, stale connection.
+            return;
+        }
+
         warn!("failed to handle request: {}", err);
         self.request = None;
 
         match Response::from_error(err).encode() {
             Ok(res) => {
-                self.send_response(res, push);
+                self.send_response(&res, push);
             }
             Err(err) => {
                 warn!("failed to encode response while handling error: {:?}", err)
@@ -302,9 +298,16 @@ impl TlsSession {
     }
 
     fn close(&mut self) {
-        self.session.send_close_notify();
+        self.send_close_notify();
         let _ = self.socket.shutdown(Shutdown::Both);
         self.closed = true;
+    }
+
+    fn send_close_notify(&mut self) {
+        if !self.close_notify_sent {
+            self.session.send_close_notify();
+            self.close_notify_sent = true;
+        }
     }
 
     pub(crate) fn register(&self, poll: &mut mio::Poll) {
@@ -476,7 +479,6 @@ impl TlsSession {
         }
     }
 }
-
 
 fn too_many_bytes_io_err(bytes: usize, max_bytes: usize) -> std::io::Error {
     std::io::Error::new(
