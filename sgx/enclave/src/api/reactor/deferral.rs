@@ -1,7 +1,6 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use mio::event::Event;
 use mio::Token;
 
 use crate::api::reactor::waker::ReactorWaker;
@@ -32,11 +31,7 @@ impl DeferralReactor {
         self.waker.register(poll)
     }
 
-    pub(crate) fn take_pending(
-        &mut self,
-        _poll: &mut mio::Poll,
-        _event: &Event,
-    ) -> Vec<(Token, Arc<dyn Send + Sync + for<'a> Fn(&'a mut Connection) -> Result<(), Error>>)> {
+    pub(crate) fn take_pending(&mut self) -> Vec<(Token, Arc<dyn Send + Sync + for<'a> Fn(&'a mut Connection) -> Result<(), Error>>)> {
         trace!("handle_event[{:?}]: CHECK PENDING", self.waker.token());
 
         // Clear the waker readiness state prior to removing pending items.

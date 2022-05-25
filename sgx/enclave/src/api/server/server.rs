@@ -23,7 +23,7 @@ lazy_static!(
     pub static ref SERVER_ID_SEQ: AtomicUsize = AtomicUsize::new(0);
 );
 
-const LISTENER: Token = Token(0);
+const LISTENER_TOKEN: Token = Token(0);
 const DEFERRAL_TOKEN: Token = Token(5);
 
 // 50 Kb
@@ -99,14 +99,14 @@ impl Server {
         }
 
         poll.register(&self.server,
-                      LISTENER,
+                      LISTENER_TOKEN,
                       mio::Ready::readable(),
                       mio::PollOpt::level()).unwrap();
 
         Ok(())
     }
 
-    fn accept(&mut self, poll: &mut mio::Poll) -> bool {
+    fn accept(&mut self, poll: &mut mio::Poll) {
         match self.server.accept() {
             Ok((socket, addr)) => {
                 debug!("[{}] accepted connection: {}", self.id, addr);
@@ -129,41 +129,11 @@ impl Server {
                                                                self.exec.clone(),
                                                                self.httpc.clone()));
                 self.connections.get_mut(&token).unwrap().register(poll);
-
-                true
             }
             Err(e) => {
                 warn!("encountered error while accepting connection; err={:?}", e);
-                false
             }
         }
-    }
-
-    pub fn check_timeouts(&mut self, poll: &mut mio::Poll) {
-        let now = Instant::now();
-        if now.saturating_duration_since(self.last_timeout).lt(&MIO_TIMEOUT_POLL) {
-            return;
-        }
-
-        for (_, conn) in self.connections.iter_mut() {
-            conn.check_timeout(poll, &now);
-        }
-
-        match self.httpc.lock() {
-            Ok(mut httpc) => httpc.check_timeouts(poll),
-            Err(err) => {
-                error!("failed to acquire lock on 'httpc' when checking timeouts: {:?}", err);
-            }
-        }
-
-        match self.exec.lock() {
-            Ok(mut exec) => exec.check_timeouts(poll, &now),
-            Err(err) => {
-                error!("failed to acquire lock on 'exec' when checking timeouts: {:?}", err);
-            }
-        }
-
-        self.last_timeout = now;
     }
 
     fn handle_event(&mut self, poll: &mut mio::Poll, event: &Event) {
@@ -198,7 +168,7 @@ impl Server {
         } else if token.eq(&DEFERRAL_TOKEN) {
             let pending = match self.deferral.lock() {
                 Ok(mut deferral) =>
-                    Some(deferral.take_pending(poll, event)),
+                    Some(deferral.take_pending()),
                 Err(err) => {
                     error!("failed to acquire lock on 'deferral' when handling event: {:?}", err);
                     None
@@ -208,6 +178,8 @@ impl Server {
             if let Some(pending) = pending {
                 self.run(poll, pending);
             }
+        } else {
+            warn!("unhandled token: {}", token_us);
         }
     }
 
@@ -238,6 +210,33 @@ impl Server {
             }
         }
     }
+
+    pub fn check_timeouts(&mut self, poll: &mut mio::Poll) {
+        let now = Instant::now();
+        if now.saturating_duration_since(self.last_timeout).lt(&MIO_TIMEOUT_POLL) {
+            return;
+        }
+
+        for (_, conn) in self.connections.iter_mut() {
+            conn.check_timeout(poll, &now);
+        }
+
+        match self.httpc.lock() {
+            Ok(mut httpc) => httpc.check_timeouts(poll),
+            Err(err) => {
+                error!("failed to acquire lock on 'httpc' when checking timeouts: {:?}", err);
+            }
+        }
+
+        match self.exec.lock() {
+            Ok(mut exec) => exec.check_timeouts(poll, &now),
+            Err(err) => {
+                error!("failed to acquire lock on 'exec' when checking timeouts: {:?}", err);
+            }
+        }
+
+        self.last_timeout = now;
+    }
 }
 
 pub(crate) fn start_api_server(addr: &str) {
@@ -261,9 +260,9 @@ pub(crate) fn start_api_server(addr: &str) {
 
     server.register(&mut poll).unwrap();
 
-    info!("🚀 [{}] Starting API server ({})", server.id, &addr);
+    info!("🚀 [{}] starting API server ({})", server.id, &addr);
 
-    'outer: loop {
+    loop {
         poll.poll(&mut events, Some(MIO_TIMEOUT_POLL))
             .unwrap();
 
@@ -271,10 +270,8 @@ pub(crate) fn start_api_server(addr: &str) {
 
         for event in events.iter() {
             match event.token() {
-                LISTENER => {
-                    if !server.accept(&mut poll) {
-                        break 'outer;
-                    }
+                LISTENER_TOKEN => {
+                    server.accept(&mut poll);
                 }
                 _ => {
                     server.handle_event(&mut poll, &event)
