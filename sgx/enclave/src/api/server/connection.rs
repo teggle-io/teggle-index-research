@@ -86,6 +86,7 @@ impl Connection {
             self.deregister(poll);
         } else {
             trace!("ready[{:?}]: CONTINUE", self.token);
+
             self.reregister(poll);
         }
     }

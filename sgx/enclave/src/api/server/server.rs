@@ -132,10 +132,10 @@ impl Server {
         }
     }
 
-    pub fn check_timeouts(&mut self, poll: &mut mio::Poll) -> bool {
+    pub fn check_timeouts(&mut self, poll: &mut mio::Poll) {
         let now = Instant::now();
         if now.saturating_duration_since(self.last_timeout).lt(&MIO_TIMEOUT_POLL) {
-            return false;
+            return;
         }
 
         for (_, conn) in self.connections.iter_mut() {
@@ -157,7 +157,6 @@ impl Server {
         }
 
         self.last_timeout = now;
-        true
     }
 
     fn handle_event(&mut self, poll: &mut mio::Poll, event: &Event) {
@@ -259,15 +258,13 @@ pub(crate) fn start_api_server(addr: &str) {
         poll.poll(&mut events, Some(MIO_TIMEOUT_POLL))
             .unwrap();
 
-        if server.check_timeouts(&mut poll) {
-            continue 'outer;
-        }
+        server.check_timeouts(&mut poll);
 
         for event in events.iter() {
             match event.token() {
                 LISTENER => {
                     if !server.accept(&mut poll) {
-                        continue 'outer;
+                        break 'outer;
                     }
                 }
                 _ => {

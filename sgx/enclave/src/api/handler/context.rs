@@ -28,21 +28,20 @@ impl Context {
             Ok(mut lock) => {
                 let mut builder = CallBuilder::get();
 
-                builder.timeout_ms(5000).host("172.17.0.1");
-
                 /*
+                  builder.timeout_ms(5000).host("172.17.0.1");
+
                   builder.timeout_ms(5000).https()
                     .host("catfact.ninja")
                     .path_segm("fact");
+                 */
 
-                  builder.timeout_ms(120000).https()
+                builder.timeout_ms(120000).https()
                     .host("gorest.co.in")
                     .path_segm("public")
                     .path_segm("v2")
                     .path_segm("posts")
                     .path_segm("1902");
-
-                 */
 
                 lock.call(builder)
             }

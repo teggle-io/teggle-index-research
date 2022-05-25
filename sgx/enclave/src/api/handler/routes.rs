@@ -52,6 +52,8 @@ fn build_routes() -> Router {
 
         r.get("/fetch", |_req, res, ctx| Box::pin(async move {
             if let Some((_, body)) = ctx.test().await? {
+                info!("RES: {:?}", String::from_utf8(body.to_vec()));
+
                 res.body(body);
 
                 Ok(())

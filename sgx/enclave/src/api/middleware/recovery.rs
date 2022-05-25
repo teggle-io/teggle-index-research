@@ -17,7 +17,6 @@ pub(crate) fn middleware_recovery<'a>(
     ctx: &'a mut Context,
     next: Handler
 ) -> BoxFuture<'a, Result<(), Error>> {
-
     Box::pin(async move {
         match AssertUnwindSafe(next(req, res, ctx)).catch_unwind().await {
             Ok(r) => r,
