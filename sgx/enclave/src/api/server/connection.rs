@@ -24,8 +24,7 @@ use crate::api::{
     reactor::exec::ExecReactor,
     reactor::httpc::HttpcReactor
 };
-
-pub(crate) static UPGRADE_OPT_KEEPALIVE: u8 = 2;
+use crate::api::results::too_many_bytes_err;
 
 pub(crate) struct Connection {
     token: mio::Token,
@@ -153,33 +152,19 @@ impl Connection {
                 }
             }
 
-            if self.request.is_some() {
-                let mut upgrade_opts = 0_u8;
-                if let Some(req) = self.request.as_ref() {
-                    // Check payload size.
-                    if let Some(content_len) = req.content_length() {
-                        if content_len > config.max_bytes_received() {
-                            self.handle_error(&too_many_bytes_err(
-                                content_len,
-                                config.max_bytes_received()), false);
-                            return;
-                        }
-                    }
-
-                    upgrade_opts = req.upgrade_opts();
+            if let Some(req) = self.request.take() {
+                if let Err(err) = req.validate(config) {
+                    self.handle_error(&err, false);
+                    return;
                 }
 
-                // Upgrade connection.
-                if upgrade_opts > 0 {
-                    self.upgrade(upgrade_opts);
-                }
+                self.upgrade(&req);
 
-                if let Some(req) = self.request.as_ref() {
-                    // Ready?
-                    if req.ready() {
-                        let req = self.request.take().unwrap();
-                        self.process_request(poll, req);
-                    }
+                // Ready?
+                if req.ready() {
+                    self.process_request(poll, req);
+                } else {
+                    self.request = Some(req);
                 }
             }
         }
@@ -440,12 +425,12 @@ impl Connection {
         self.closed
     }
 
-    pub(crate) fn upgrade(&mut self, opts: u8) {
+    pub(crate) fn upgrade(&mut self, req: &RawRequest) {
         if self.upgraded {
             return;
         }
 
-        if opts & UPGRADE_OPT_KEEPALIVE > 0 {
+        if req.is_upgrade_keepalive() {
             self.set_keepalive();
         }
 
@@ -487,13 +472,6 @@ fn too_many_bytes_io_err(bytes: usize, max_bytes: usize) -> std::io::Error {
         Box::new(
             too_many_bytes_err(bytes, max_bytes)),
     )
-}
-
-fn too_many_bytes_err(bytes: usize, max_bytes: usize) -> Error {
-    Error::new_with_kind(
-        ErrorKind::PayloadTooLarge,
-        format!("too many bytes sent ({} > {})",
-                bytes, max_bytes).to_string())
 }
 
 // Copied from std::io::Read::read_to_end to retain performance

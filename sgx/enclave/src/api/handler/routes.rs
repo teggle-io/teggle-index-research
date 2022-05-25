@@ -52,7 +52,11 @@ fn build_routes() -> Router {
             res.ok("Ok")
         }));
 
-        r.get("/fetch", |_req, res: &mut Response, ctx: &mut Context| Box::pin(async move {
+        r.get("/fetch", |
+            _req,
+            res: &mut Response,
+            ctx: &mut Context
+        | Box::pin(async move {
             let resp = ctx.https()
                 .host("catfact.ninja")
                 .path("fact")

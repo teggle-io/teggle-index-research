@@ -115,3 +115,10 @@ impl Display for Error {
 impl std::error::Error for Error {
 
 }
+
+pub(crate) fn too_many_bytes_err(bytes: usize, max_bytes: usize) -> Error {
+    Error::new_with_kind(
+        ErrorKind::PayloadTooLarge,
+        format!("too many bytes sent ({} > {})",
+                bytes, max_bytes).to_string())
+}

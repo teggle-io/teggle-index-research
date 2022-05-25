@@ -16,15 +16,21 @@ use crate::api::handler::codec::GLOBAL_CODEC;
 use crate::api::handler::context::Context;
 use crate::api::handler::response::Response;
 use crate::api::handler::router::route_request;
-use crate::api::results::{EncodedResponseResult, Error, ErrorKind};
-use crate::api::server::connection::{UPGRADE_OPT_KEEPALIVE};
 use crate::api::reactor::httpc::HttpcReactor;
+use crate::api::results::{EncodedResponseResult, Error, ErrorKind, too_many_bytes_err};
+use crate::api::server::config::Config;
 
-static CONN_KEEPALIVE: &str = "keep-alive";
+pub(crate) static UPGRADE_OPT_KEEPALIVE: u8 = 2;
+pub(crate) static UPGRADE_OPT_WEBSOCKET: u8 = 3;
+
+static HEADER_CONNECTION_KEEPALIVE: &str = "keep-alive";
+static HEADER_CONNECTION_UPGRADE: &str = "upgrade";
+
+static HEADER_UPGRADE_WEBSOCKET: &str = "websocket";
 
 pub(crate) async fn process_raw_request(
     httpc: Arc<SgxMutex<HttpcReactor>>,
-    raw_req: RawRequest
+    raw_req: RawRequest,
 ) -> EncodedResponseResult {
     match raw_req.extract() {
         Some(mut req) => {
@@ -45,7 +51,9 @@ pub(crate) async fn process_raw_request(
 pub(crate) struct RawRequest {
     request: Option<http::request::Builder>,
     data: BytesMut,
-    bytes: usize, // Total bytes read.
+    bytes: usize,
+    opts: u8,
+    // Total bytes read.
     timeout: Option<Instant>,
 }
 
@@ -55,8 +63,9 @@ impl RawRequest {
         let mut req = Self {
             request: None,
             bytes: data.len(),
+            opts: 0,
             data: BytesMut::from(data.as_slice()),
-            timeout: Some(timeout)
+            timeout: Some(timeout),
         };
         req.try_decode()?;
 
@@ -105,15 +114,8 @@ impl RawRequest {
     }
 
     #[inline]
-    pub fn upgrade_opts(&self) -> u8 {
-        let mut opts = 0_u8;
-
-        if self.has_header_value(http::header::CONNECTION, CONN_KEEPALIVE) {
-            // Not sure this is really needed (I think this happens anyway).
-            opts |= UPGRADE_OPT_KEEPALIVE;
-        }
-
-        opts
+    pub fn is_upgrade_keepalive(&self) -> bool {
+        self.opts & UPGRADE_OPT_KEEPALIVE > 0
     }
 
     #[inline]
@@ -141,14 +143,24 @@ impl RawRequest {
     }
 
     #[inline]
-    pub fn has_header_value<K: AsHeaderName>(&self, key: K, val: &str) -> bool {
-        if let Some(req) = self.request.as_ref() {
-            if let Some(headers) = req.headers_ref() {
-                return has_header(headers, key, val);
+    pub fn validate(&self, config: Arc<Config>) -> Result<(), Error> {
+        if self.request.is_none() {
+            return Err(Error::new_with_kind(
+                ErrorKind::ServerFault,
+                "request validation failed - no request object".to_string(),
+            ));
+        }
+
+        //let req = self.request.as_ref().unwrap();
+
+        // Check payload size.
+        if let Some(content_len) = self.content_length() {
+            if content_len > config.max_bytes_received() {
+                return Err(too_many_bytes_err(content_len, config.max_bytes_received()));
             }
         }
 
-        false
+        Ok(())
     }
 
     // private
@@ -159,6 +171,8 @@ impl RawRequest {
             self.request = GLOBAL_CODEC.decode(&mut self.data)?;
         }
 
+        self.extract_upgrade_opts();
+
         Ok(())
     }
 
@@ -166,6 +180,27 @@ impl RawRequest {
     fn push(&mut self, body: Vec<u8>) {
         self.data.extend_from_slice(body.as_slice());
     }
+
+    #[inline]
+    fn extract_upgrade_opts(&mut self) {
+        self.opts = 0;
+
+        if let Some(req) = self.request.as_ref() {
+            if let Some(headers) = req.headers_ref() {
+                if has_header(headers, http::header::CONNECTION, HEADER_CONNECTION_KEEPALIVE)
+                    || has_header(headers, http::header::CONNECTION, HEADER_CONNECTION_UPGRADE) {
+                    // Not sure this is really needed (I think this happens anyway).
+                    self.opts |= UPGRADE_OPT_KEEPALIVE;
+                }
+
+                if has_header(headers, http::header::CONNECTION, HEADER_CONNECTION_UPGRADE)
+                    && has_header(headers, http::header::UPGRADE, HEADER_UPGRADE_WEBSOCKET) {
+                    self.opts |= UPGRADE_OPT_WEBSOCKET;
+                }
+            }
+        }
+    }
+
 }
 
 pub(crate) struct Request {
@@ -218,15 +253,15 @@ impl Request {
     #[inline]
     pub(crate) fn should_keep_alive(&self) -> bool {
         return self.version().ne(&Version::HTTP_10)
-            || self.has_header_value(http::header::CONNECTION, CONN_KEEPALIVE);
+            || self.has_header_value(http::header::CONNECTION, HEADER_CONNECTION_KEEPALIVE);
     }
 
     #[inline]
     pub(crate) fn json<T>(&self) -> Result<T, Error>
-    where
-        T: DeserializeOwned
+        where
+            T: DeserializeOwned
     {
-        let res: serde_json::Result<T>  = serde_json::from_reader(self.body.as_slice());
+        let res: serde_json::Result<T> = serde_json::from_reader(self.body.as_slice());
         match res {
             Ok(res) => {
                 Ok(res)
