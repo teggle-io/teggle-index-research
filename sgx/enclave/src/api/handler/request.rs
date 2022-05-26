@@ -51,10 +51,12 @@ pub(crate) async fn process_raw_request(
 pub(crate) struct RawRequest {
     request: Option<http::request::Builder>,
     data: BytesMut,
-    bytes: usize,
-    opts: u8,
     // Total bytes read.
+    bytes: usize,
     timeout: Option<Instant>,
+    // Cached
+    content_length: usize,
+    upgrade_opts: u8,
 }
 
 impl RawRequest {
@@ -63,9 +65,10 @@ impl RawRequest {
         let mut req = Self {
             request: None,
             bytes: data.len(),
-            opts: 0,
             data: BytesMut::from(data.as_slice()),
             timeout: Some(timeout),
+            content_length: 0,
+            upgrade_opts: 0,
         };
         req.try_decode()?;
 
@@ -88,25 +91,14 @@ impl RawRequest {
     }
 
     #[inline]
-    pub fn content_length(&self) -> Option<usize> {
-        str::parse::<usize>(self.request
-            .as_ref()?
-            .headers_ref()?
-            .get(http::header::CONTENT_LENGTH)?
-            .to_str().ok()?).ok()
-    }
-
-    #[inline]
     pub(crate) fn ready(&self) -> bool {
         if self.request.is_none() {
             return false;
         }
 
-        if let Some(content_length) = self.content_length() {
-            if content_length > 0 {
-                if self.data.len() < content_length {
-                    return false;
-                }
+        if self.content_length > 0 {
+            if self.data.len() < self.content_length {
+                return false;
             }
         }
 
@@ -115,7 +107,12 @@ impl RawRequest {
 
     #[inline]
     pub fn is_upgrade_keepalive(&self) -> bool {
-        self.opts & UPGRADE_OPT_KEEPALIVE > 0
+        self.upgrade_opts & UPGRADE_OPT_KEEPALIVE > 0
+    }
+
+    #[inline]
+    pub fn is_upgrade_websocket(&self) -> bool {
+        self.upgrade_opts & UPGRADE_OPT_WEBSOCKET > 0
     }
 
     #[inline]
@@ -151,13 +148,19 @@ impl RawRequest {
             ));
         }
 
-        //let req = self.request.as_ref().unwrap();
+        let req = self.request.as_ref().unwrap();
 
         // Check payload size.
-        if let Some(content_len) = self.content_length() {
-            if content_len > config.max_bytes_received() {
-                return Err(too_many_bytes_err(content_len, config.max_bytes_received()));
+        if self.content_length > 0 {
+            if self.content_length > config.max_bytes_received() {
+                return Err(too_many_bytes_err(self.content_length,
+                                              config.max_bytes_received()));
             }
+        }
+
+        // Check websocket request.
+        if self.is_upgrade_websocket() {
+
         }
 
         Ok(())
@@ -172,6 +175,7 @@ impl RawRequest {
         }
 
         self.extract_upgrade_opts();
+        self.extract_content_length();
 
         Ok(())
     }
@@ -183,24 +187,40 @@ impl RawRequest {
 
     #[inline]
     fn extract_upgrade_opts(&mut self) {
-        self.opts = 0;
+        self.upgrade_opts = 0;
 
         if let Some(req) = self.request.as_ref() {
             if let Some(headers) = req.headers_ref() {
                 if has_header(headers, http::header::CONNECTION, HEADER_CONNECTION_KEEPALIVE)
                     || has_header(headers, http::header::CONNECTION, HEADER_CONNECTION_UPGRADE) {
                     // Not sure this is really needed (I think this happens anyway).
-                    self.opts |= UPGRADE_OPT_KEEPALIVE;
+                    self.upgrade_opts |= UPGRADE_OPT_KEEPALIVE;
                 }
 
                 if has_header(headers, http::header::CONNECTION, HEADER_CONNECTION_UPGRADE)
                     && has_header(headers, http::header::UPGRADE, HEADER_UPGRADE_WEBSOCKET) {
-                    self.opts |= UPGRADE_OPT_WEBSOCKET;
+                    self.upgrade_opts |= UPGRADE_OPT_WEBSOCKET;
                 }
             }
         }
     }
 
+    #[inline]
+    fn extract_content_length(&mut self) {
+        self.content_length = 0;
+
+        if let Some(req) = self.request.as_ref() {
+            if let Some(headers) = req.headers_ref() {
+                if let Some(val) = headers.get(http::header::CONTENT_LENGTH) {
+                    if let Ok(val) = val.to_str() {
+                        if let Ok(val) = str::parse::<usize>(val) {
+                            self.content_length = val;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub(crate) struct Request {
