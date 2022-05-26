@@ -6,11 +6,11 @@ use core::str::FromStr;
 use bytes::BytesMut;
 use http::{Extensions, HeaderMap, HeaderValue, Method, Uri, Version};
 use http::header::AsHeaderName;
-use log::warn;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::sync::SgxMutex;
 use std::time::Instant;
+use tungstenite::handshake::server::create_response;
 
 use crate::api::handler::codec::GLOBAL_CODEC;
 use crate::api::handler::context::Context;
@@ -32,7 +32,7 @@ pub(crate) async fn process_raw_request(
     httpc: Arc<SgxMutex<HttpcReactor>>,
     raw_req: RawRequest,
 ) -> EncodedResponseResult {
-    match raw_req.extract() {
+    return match raw_req.extract() {
         Some(mut req) => {
             let mut res = Response::from_request(&req);
             let mut ctx: Context = Context::new(httpc);
@@ -42,8 +42,43 @@ pub(crate) async fn process_raw_request(
             res.encode()
         }
         None => {
-            warn!("failed to expand raw request from builder");
-            Response::encode_fault()
+            Err(Error::new_with_kind(
+                ErrorKind::ServerFault,
+                "failed to extract request from raw request".to_string(),
+            ))
+        }
+    }
+}
+
+pub(crate) async fn process_ws_raw_request(
+    httpc: Arc<SgxMutex<HttpcReactor>>,
+    raw_req: RawRequest,
+) -> EncodedResponseResult {
+    return match raw_req.extract() {
+        Some(mut req) => {
+            return match create_response(req.request().into()) {
+                Ok(res) => {
+                    let (parts, _) = res.into_parts();
+                    let mut res = Response::from_request_and_parts(&req, parts);
+                    let mut ctx: Context = Context::new(httpc);
+
+                    route_request(&mut req, &mut res, &mut ctx).await?;
+
+                    res.encode()
+                }
+                Err(err) => {
+                    Err(Error::new_with_kind(
+                        ErrorKind::WSFault,
+                        format!("failed to extract ws request - {:?}", err),
+                    ))
+                }
+            }
+        }
+        None => {
+            Err(Error::new_with_kind(
+                ErrorKind::ServerFault,
+                "failed to extract ws request from raw request".to_string(),
+            ))
         }
     }
 }
@@ -148,19 +183,12 @@ impl RawRequest {
             ));
         }
 
-        let req = self.request.as_ref().unwrap();
-
         // Check payload size.
         if self.content_length > 0 {
             if self.content_length > config.max_bytes_received() {
                 return Err(too_many_bytes_err(self.content_length,
                                               config.max_bytes_received()));
             }
-        }
-
-        // Check websocket request.
-        if self.is_upgrade_websocket() {
-
         }
 
         Ok(())
@@ -233,6 +261,11 @@ impl Request {
     #[inline]
     pub(crate) fn new(req: http::Request<()>, body: Vec<u8>) -> Self {
         Self { req, body, vars: None }
+    }
+
+    #[inline]
+    fn request(&self) -> &http::Request<()> {
+        &self.req
     }
 
     #[inline]

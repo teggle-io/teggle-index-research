@@ -41,19 +41,21 @@ impl Response {
     }
 
     #[inline]
+    pub(crate) fn from_request_and_parts(req: &Request, parts: Parts) -> Self {
+        let mut res = Self::new();
+        res.version(req.version());
+        res.parts = parts;
+        res.close = !req.should_keep_alive();
+        res
+    }
+
+    #[inline]
     pub fn from_error(err: &Error)-> Self {
         let mut res = Self::new();
         let status = err.http_status();
         res.error(status,status.canonical_reason()
             .or(Some("General Fault")).unwrap()).unwrap();
         res
-    }
-
-    #[inline]
-    pub(crate) fn encode_fault() -> EncodedResponseResult {
-        let mut res = Self::new();
-        res.fault()?;
-        res.encode()
     }
 
     #[inline]

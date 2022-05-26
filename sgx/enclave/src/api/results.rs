@@ -46,6 +46,8 @@ pub enum ErrorKind {
     DecodeFault,
     // General fault.
     ServerFault,
+    // Web Socket fault.
+    WSFault,
     // Timed out.
     TimedOut,
     // Too big.
@@ -64,6 +66,7 @@ impl Display for ErrorKind {
             ErrorKind::EncodeFault => write!(f, "EncodeFault"),
             ErrorKind::DecodeFault => write!(f, "DecodeFault"),
             ErrorKind::ServerFault => write!(f, "ServerFault"),
+            ErrorKind::WSFault => write!(f, "WSFault"),
             ErrorKind::TimedOut => write!(f, "TimedOut"),
             ErrorKind::PayloadTooLarge => write!(f, "PayloadTooLarge"),
             ErrorKind::ExecError => write!(f, "ExecError"),
@@ -96,6 +99,7 @@ impl Error {
             ErrorKind::EncodeFault => StatusCode::INTERNAL_SERVER_ERROR,
             ErrorKind::DecodeFault => StatusCode::INTERNAL_SERVER_ERROR,
             ErrorKind::ServerFault => StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorKind::WSFault => StatusCode::BAD_REQUEST,
             ErrorKind::TimedOut => StatusCode::REQUEST_TIMEOUT,
             ErrorKind::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             ErrorKind::ExecError => StatusCode::BAD_GATEWAY,

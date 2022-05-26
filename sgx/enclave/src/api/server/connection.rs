@@ -6,8 +6,9 @@ use core::future::Future;
 use core::ops::Add;
 
 use log::{trace, warn};
-use mio::event::Event;
+use mio::event::{Event, Evented};
 use mio::net::TcpStream;
+use mio::Token;
 use rustls::Session;
 use std::io;
 use std::io::{ErrorKind as StdErrorKind, Read, Write};
@@ -18,22 +19,22 @@ use std::time::Instant;
 use crate::api::{
     handler::request::{process_raw_request, RawRequest},
     handler::response::Response,
-    results::{Error, ErrorKind, ResponseBody},
+    results::{Error, ErrorKind, ResponseBody, too_many_bytes_err},
     server::config::Config,
-    reactor::deferral::DeferralReactor,
     reactor::exec::ExecReactor,
-    reactor::httpc::HttpcReactor
+    reactor::httpc::HttpcReactor,
+    reactor::waker::ReactorWaker
 };
-use crate::api::results::too_many_bytes_err;
+use crate::api::handler::request::process_ws_raw_request;
 
 pub(crate) struct Connection {
     token: mio::Token,
     socket: TcpStream,
     session: rustls::ServerSession,
     config: Arc<Config>,
-    deferral: Arc<SgxMutex<DeferralReactor>>,
     exec: Arc<SgxMutex<ExecReactor>>,
     httpc: Arc<SgxMutex<HttpcReactor>>,
+    deferral: Arc<SgxMutex<Deferral>>,
     request: Option<RawRequest>,
     upgraded: bool,
     closing: bool,
@@ -43,22 +44,21 @@ pub(crate) struct Connection {
 
 impl Connection {
     pub(crate) fn new(
-        token: mio::Token,
+        conn_id: usize,
         socket: TcpStream,
         session: rustls::ServerSession,
         config: Arc<Config>,
-        deferral: Arc<SgxMutex<DeferralReactor>>,
         exec: Arc<SgxMutex<ExecReactor>>,
         httpc: Arc<SgxMutex<HttpcReactor>>,
     ) -> Self {
         Self {
-            token,
+            token: Token(conn_id),
             socket,
             session,
             config,
-            deferral,
             exec,
             httpc,
+            deferral: Arc::new(SgxMutex::new(Deferral::new(Token(conn_id + 1)))),
             request: None,
             upgraded: false,
             closing: false,
@@ -67,11 +67,15 @@ impl Connection {
         }
     }
 
-    pub(crate) fn ready(&mut self, poll: &mut mio::Poll, ev: &Event) {
-        if ev.readiness().is_readable() {
-            trace!("ready[{:?}]: READ", self.token);
-            self.read_tls();
-            self.handle_request(poll);
+    pub(crate) fn ready(&mut self, poll: &mut mio::Poll, ev: &Event, is_wakeup: bool) {
+        if is_wakeup {
+            self.wake();
+        } else {
+            if ev.readiness().is_readable() {
+                trace!("ready[{:?}]: READ", self.token);
+                self.read_tls();
+                self.handle_request(poll);
+            }
         }
 
         if ev.readiness().is_writable() {
@@ -90,23 +94,27 @@ impl Connection {
         }
     }
 
-    pub(crate) fn run(&mut self, poll: &mut mio::Poll,
-                      run: Arc<dyn Send + Sync + for<'a> Fn(&'a mut Connection) -> Result<(), Error>>) {
-        trace!("run[{:?}]: RUN", self.token);
-        match run(self) {
-            Ok(_) => {}
-            Err(err) => {
-                self.handle_error(&err, true);
+    fn wake(&mut self) {
+        let deferrals = match self.deferral.lock() {
+            Ok(mut deferral) => {
+                Some(deferral.take_pending())
             }
-        }
+            Err(err) => {
+                error!("failed to acquire lock on 'deferral' when waking: {:?}", err);
+                None
+            }
+        };
 
-        if self.is_closing() {
-            trace!("run[{:?}]: CLOSE", self.token);
-            self.close();
-            self.deregister(poll);
-        } else {
-            trace!("run[{:?}]: CONTINUE", self.token);
-            self.reregister(poll);
+        if let Some(deferrals) = deferrals {
+            for defer in deferrals {
+                trace!("wake[{:?}]: RUN", self.token);
+                match defer(self) {
+                    Ok(_) => {}
+                    Err(err) => {
+                        self.handle_error(&err, true);
+                    }
+                }
+            }
         }
     }
 
@@ -171,16 +179,19 @@ impl Connection {
     }
 
     fn process_request(&mut self, poll: &mut mio::Poll, req: RawRequest) {
-        let conn_id = self.token.clone();
         let deferral = self.deferral.clone();
         let httpc = self.httpc.clone();
 
         if let Err(err) = self.spawn(poll, async move {
-            let result = process_raw_request(httpc, req).await;
+            let result = if req.is_upgrade_websocket() {
+                process_ws_raw_request(httpc, req).await
+            } else {
+                process_raw_request(httpc, req).await
+            };
 
             match deferral.lock() {
                 Ok(mut deferral) => {
-                    deferral.defer(conn_id, Arc::new(move |conn| {
+                    deferral.defer(Arc::new(move |conn| {
                         match &result {
                             Ok(res) => {
                                 conn.send_response(res, true);
@@ -297,6 +308,17 @@ impl Connection {
     }
 
     pub(crate) fn register(&self, poll: &mut mio::Poll) {
+        match self.deferral.lock() {
+            Ok(deferral) => {
+                if let Err(err) = deferral.register(poll) {
+                    error!("failed to call register on 'deferral': {:?}", err);
+                }
+            },
+            Err(err) => {
+                error!("failed to acquire lock on 'deferral' during register: {:?}", err);
+            }
+        }
+
         poll.register(&self.socket,
                       self.token,
                       self.event_set(),
@@ -315,6 +337,17 @@ impl Connection {
     fn deregister(&self, poll: &mut mio::Poll) {
         poll.deregister(&self.socket)
             .unwrap();
+
+        match self.deferral.lock() {
+            Ok(deferral) => {
+                if let Err(err) = deferral.deregister(poll) {
+                    error!("failed to call deregister on 'deferral': {:?}", err);
+                }
+            },
+            Err(err) => {
+                error!("failed to acquire lock on 'deferral' during deregister: {:?}", err);
+            }
+        }
     }
 
     fn event_set(&self) -> mio::Ready {
@@ -463,6 +496,44 @@ impl Connection {
                 self.deregister(poll);
             }
         }
+    }
+}
+
+pub(crate) struct Deferral {
+    waker: ReactorWaker,
+    pending: Vec<Arc<dyn Send + Sync + for<'a> Fn(&'a mut Connection) -> Result<(), Error>>>,
+}
+
+impl Deferral {
+    fn new(waker_token: Token) -> Self {
+        Self {
+            waker: ReactorWaker::new(waker_token),
+            pending: Vec::new()
+        }
+    }
+
+    pub(crate) fn defer(&mut self, defer: Arc<dyn Send + Sync + for<'a> Fn(&'a mut Connection) -> Result<(), Error>>) {
+        self.pending.push(defer);
+        if let Err(err) = self.waker.trigger() {
+            warn!("Deferral failed to trigger waker: {:?}", err)
+        }
+    }
+
+    pub(crate) fn register(&self, poll: &mut mio::Poll) -> std::io::Result<()> {
+        self.waker.register(poll)
+    }
+
+    pub(crate) fn deregister(&self, poll: &mut mio::Poll) -> std::io::Result<()> {
+        self.waker.deregister(poll)
+    }
+
+    fn take_pending(&mut self) -> Vec<Arc<dyn Send + Sync + for<'a> Fn(&'a mut Connection) -> Result<(), Error>>> {
+        // Clear the waker readiness state prior to removing pending items.
+        if let Err(err) = self.waker.clear() {
+            warn!("Deferral failed to clear waker: {:?}", err)
+        }
+
+        std::mem::take(&mut self.pending)
     }
 }
 

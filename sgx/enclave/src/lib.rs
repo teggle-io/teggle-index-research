@@ -49,6 +49,7 @@ extern crate futures;
 extern crate http;
 extern crate httparse;
 extern crate httpdate;
+extern crate tungstenite;
 extern crate bytes;
 extern crate serde;
 #[macro_use]
