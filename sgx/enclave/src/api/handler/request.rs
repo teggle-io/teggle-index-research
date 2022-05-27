@@ -35,15 +35,15 @@ pub(crate) async fn process_raw_request(
     raw_req: RawRequest
 ) {
     let result = match raw_req.extract() {
-        Some(mut req) => {
+        Some(req) => {
             if req.is_websocket() {
                 match create_response(req.request().into()) {
                     Ok(res) => {
                         let (parts, _) = res.into_parts();
                         let mut res = Response::from_request_and_parts(&req, parts);
-                        let mut ctx: Context = Context::new(deferral.clone(), httpc);
+                        let mut ctx: Context = Context::new(req, deferral.clone(), httpc);
 
-                        match route_request(&mut req, &mut res, &mut ctx).await {
+                        match route_request(&mut ctx, &mut res).await {
                             Ok(_) => res.encode(),
                             Err(err) => Err(err)
                         }
@@ -57,9 +57,9 @@ pub(crate) async fn process_raw_request(
                 }
             } else {
                 let mut res = Response::from_request(&req);
-                let mut ctx: Context = Context::new(deferral.clone(), httpc);
+                let mut ctx: Context = Context::new(req, deferral.clone(), httpc);
 
-                match route_request(&mut req, &mut res, &mut ctx).await {
+                match route_request(&mut ctx, &mut res).await {
                     Ok(_) => res.encode(),
                     Err(err) => Err(err)
                 }

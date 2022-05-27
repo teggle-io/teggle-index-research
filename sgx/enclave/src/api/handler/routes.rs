@@ -25,22 +25,23 @@ fn build_routes() -> Router {
     r.require(middleware_recovery);
 
     r.route("/test", |mut r| {
-        r.require(|req, res, ctx, next| Box::pin(async move {
+        r.require(|ctx, res, next| Box::pin(async move {
             //info!("inside test");
             ctx.insert("test", "value");
 
-            next(req, res, ctx).await
+            next(ctx, res).await
         }));
 
-        r.get("/ping", |_req, res, _ctx| Box::pin(async move {
+        r.get("/ping", |_ctx, res| Box::pin(async move {
             res.ok("PONG")
         }));
 
-        r.get("/panic", |_req, _res, _ctx| Box::pin(async move {
+        r.get("/panic", |_ctx, _res| Box::pin(async move {
             panic!("YELP");
         }));
 
-        r.post("/post", |req, res, ctx| Box::pin(async move {
+        r.post("/post", |ctx, res| Box::pin(async move {
+            let req = ctx.request();
             let content_type: Option<String> = req.header(http::header::CONTENT_TYPE);
             let test_val: Option<String> = ctx.get("test");
             let payload: TestPayload = req.json()?;
@@ -53,9 +54,8 @@ fn build_routes() -> Router {
         }));
 
         r.get("/fetch", |
-            _req,
+            ctx: &mut Context,
             res: &mut Response,
-            ctx: &mut Context
         | Box::pin(async move {
             let resp = ctx.https()
                 .host("catfact.ninja")
@@ -73,17 +73,19 @@ fn build_routes() -> Router {
         }));
     });
 
-    r.get("/ping", |_req, res, _ctx| Box::pin(async move {
+    r.get("/ping", |_ctx, res| Box::pin(async move {
         res.ok("PONG")
     }));
 
-    r.get("/hello/:name", |req, res, _ctx| Box::pin(async move {
+    r.get("/hello/:name", |ctx, res| Box::pin(async move {
+        let req = ctx.request();
         let name: Option<String> = req.var("name");
 
         res.ok(format!("Hello {}", name.unwrap()).as_str())
     }));
 
-    r.get("/calc/:a/:b", |req, res, _ctx| Box::pin(async move {
+    r.get("/calc/:a/:b", |ctx, res| Box::pin(async move {
+        let req = ctx.request();
         let a: Option<u32> = req.var("a");
         let b: Option<u32> = req.var("b");
 

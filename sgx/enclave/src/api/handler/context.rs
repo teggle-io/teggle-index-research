@@ -3,12 +3,12 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::future::Future;
 use core::str::FromStr;
-use futures::future::BoxFuture;
 use futures::FutureExt;
 
 use mio_httpc::{CallBuilder, Method};
 use std::collections::HashMap;
 use std::sync::SgxMutex;
+use crate::api::handler::request::Request;
 
 use crate::api::reactor::httpc::{HttpcCallFuture, HttpcReactor};
 use crate::api::results::{Error, ErrorKind};
@@ -17,23 +17,34 @@ use crate::api::server::connection::Deferral;
 const FETCH_DEFAULT_TIMEOUT_MS: u64 = 2500;
 
 pub(crate) struct Context {
-    data: HashMap<String, String>,
+    request: Request,
     deferral: Arc<SgxMutex<Deferral>>,
     httpc: Arc<SgxMutex<HttpcReactor>>,
+    data: HashMap<String, String>,
 }
 
 #[allow(dead_code)]
 impl Context {
     #[inline]
     pub(crate) fn new(
+        request: Request,
         deferral: Arc<SgxMutex<Deferral>>,
         httpc: Arc<SgxMutex<HttpcReactor>>,
     ) -> Self {
         Self {
-            data: HashMap::new(),
+            request,
             deferral,
             httpc,
+            data: HashMap::new(),
         }
+    }
+
+    pub fn request(&self) -> &Request {
+        &self.request
+    }
+
+    pub fn request_mut(&mut self) -> &mut Request {
+        &mut self.request
     }
 
     // Web Sockets

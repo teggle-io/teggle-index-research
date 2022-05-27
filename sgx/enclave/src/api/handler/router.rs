@@ -10,25 +10,29 @@ use std::path::PathBuf;
 use std::sync::SgxRwLock;
 use crate::api::handler::context::Context;
 
-use crate::api::handler::request::{Request};
 use crate::api::handler::response::Response;
 use crate::api::handler::routes::ROUTER;
 use crate::api::results::Error;
 
 const CAPTURE_PLACEHOLDER: &'static str = "*CAPTURE*";
 
-pub(crate) type Handler = Arc<dyn Send + Sync + for<'a> Fn(&'a Request, &'a mut Response, &'a mut Context) -> BoxFuture<'a, Result<(), Error>>>;
-pub(crate) type HandlerFn = for<'a> fn(&'a Request, &'a mut Response, &'a mut Context) -> BoxFuture<'a, Result<(), Error>>;
-pub(crate) type Middleware = Arc<dyn Send + Sync + for<'a> Fn(&'a Request, &'a mut Response, &'a mut Context, Handler) -> BoxFuture<'a, Result<(), Error>>>;
-pub(crate) type MiddlewareFn = for<'a> fn(&'a Request, &'a mut Response, &'a mut Context, Handler) -> BoxFuture<'a, Result<(), Error>>;
+pub(crate) type Handler = Arc<dyn Send + Sync + for<'a> Fn(&'a mut Context, &'a mut Response) -> BoxFuture<'a, Result<(), Error>>>;
+pub(crate) type HandlerFn = for<'a> fn(&'a mut Context, &'a mut Response) -> BoxFuture<'a, Result<(), Error>>;
+pub(crate) type Middleware = Arc<dyn Send + Sync + for<'a> Fn(&'a mut Context, &'a mut Response, Handler) -> BoxFuture<'a, Result<(), Error>>>;
+pub(crate) type MiddlewareFn = for<'a> fn(&'a mut Context, &'a mut Response, Handler) -> BoxFuture<'a, Result<(), Error>>;
 
 #[inline]
-pub(crate) async fn route_request(req: &mut Request, res: &mut Response, ctx: &mut Context) -> Result<(), Error> {
-    match ROUTER.clone().find(req.method(), req.uri().path()) {
-        Some((handler, captures)) => {
-            req.vars(captures);
+pub(crate) async fn route_request(ctx: &mut Context, res: &mut Response) -> Result<(), Error> {
+    let (method, path) = {
+        let req = ctx.request();
+        (req.method(), req.uri().path())
+    };
 
-            handler.route(req, res, ctx).await
+    match ROUTER.clone().find(method, path) {
+        Some((handler, captures)) => {
+            ctx.request_mut().vars(captures);
+
+            handler.route(ctx, res).await
         }
         None => {
             res.error(StatusCode::NOT_FOUND, "Not Found")
@@ -304,11 +308,11 @@ impl RouteHandler {
         // Finalize middleware
         let cb_handler = handler.clone();
         let mut middleware: Vec<Middleware> = middleware.clone();
-        middleware.push(Arc::new(move |req, res, ctx, _next| {
+        middleware.push(Arc::new(move |ctx, res, _next| {
             let cb_handler = cb_handler.clone();
             Box::pin(async move {
                 // Last middleware to call handler, do not call next.
-                cb_handler(req, res, ctx).await
+                cb_handler(ctx, res).await
             })
         }));
 
@@ -321,16 +325,15 @@ impl RouteHandler {
         }
     }
 
-    async fn route(&self, req: &mut Request, res: &mut Response, ctx: &mut Context) -> Result<(), Error> {
+    async fn route(&self, ctx: &mut Context, res: &mut Response) -> Result<(), Error> {
         let middleware: Vec<Middleware> = self.middleware.clone();
-        _route_step(req, res, ctx, Arc::new(middleware), 0).await
+        _route_step(ctx, res, Arc::new(middleware), 0).await
     }
 }
 
 fn _route_step<'a>(
-    req: &'a Request,
-    res: &'a mut Response,
     ctx: &'a mut Context,
+    res: &'a mut Response,
     middleware: Arc<Vec<Middleware>>,
     level: usize,
 ) -> BoxFuture<'a, Result<(), Error>> {
@@ -340,16 +343,15 @@ fn _route_step<'a>(
         let middleware = middleware.clone();
 
         cur(
-            req,
-            res,
             ctx,
-            Arc::new(move |req, res, ctx| {
+            res,
+            Arc::new(move |ctx, res| {
                 let middleware = middleware.clone();
                 Box::pin(async move {
                     if last {
                         return Ok(());
                     }
-                    _route_step(req, res, ctx, middleware, level + 1).await
+                    _route_step(ctx, res, middleware, level + 1).await
                 })
             }),
         ).await
