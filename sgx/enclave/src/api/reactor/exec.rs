@@ -32,7 +32,7 @@ impl ExecReactor {
     }
 
     pub(crate) fn spawn(&mut self, poll: &mut mio::Poll, future: impl Future<Output=()> + 'static + Send) {
-        self.spawn(poll, future.boxed())
+        self.spawn_boxed(poll, future.boxed())
     }
 
     pub(crate) fn spawn_boxed(&mut self, poll: &mut mio::Poll, future: BoxFuture<'static, ()>) {

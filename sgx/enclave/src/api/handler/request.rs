@@ -17,7 +17,7 @@ use crate::api::handler::context::Context;
 use crate::api::handler::response::Response;
 use crate::api::handler::router::route_request;
 use crate::api::reactor::httpc::HttpcReactor;
-use crate::api::results::{EncodedResponseResult, Error, ErrorKind, too_many_bytes_err};
+use crate::api::results::{Error, ErrorKind, too_many_bytes_err};
 use crate::api::server::config::Config;
 use crate::api::server::connection::Deferral;
 
@@ -34,14 +34,35 @@ pub(crate) async fn process_raw_request(
     httpc: Arc<SgxMutex<HttpcReactor>>,
     raw_req: RawRequest
 ) {
-    let res = match raw_req.extract() {
+    let result = match raw_req.extract() {
         Some(mut req) => {
-            let mut res = Response::from_request(&req);
-            let mut ctx: Context = Context::new(httpc);
+            if req.is_websocket() {
+                match create_response(req.request().into()) {
+                    Ok(res) => {
+                        let (parts, _) = res.into_parts();
+                        let mut res = Response::from_request_and_parts(&req, parts);
+                        let mut ctx: Context = Context::new(deferral.clone(), httpc);
 
-            match route_request(&mut req, &mut res, &mut ctx).await {
-                Ok(_) => res.encode(),
-                Err(err) => Err(err)
+                        match route_request(&mut req, &mut res, &mut ctx).await {
+                            Ok(_) => res.encode(),
+                            Err(err) => Err(err)
+                        }
+                    }
+                    Err(err) => {
+                        Err(Error::new_with_kind(
+                            ErrorKind::WSFault,
+                            format!("failed to extract ws request - {:?}", err),
+                        ))
+                    }
+                }
+            } else {
+                let mut res = Response::from_request(&req);
+                let mut ctx: Context = Context::new(deferral.clone(), httpc);
+
+                match route_request(&mut req, &mut res, &mut ctx).await {
+                    Ok(_) => res.encode(),
+                    Err(err) => Err(err)
+                }
             }
         }
         None => {
@@ -52,51 +73,6 @@ pub(crate) async fn process_raw_request(
         }
     };
 
-    handle_process_raw_request_result("process_raw_request", deferral, res)
-}
-
-pub(crate) async fn process_ws_raw_request(
-    deferral: Arc<SgxMutex<Deferral>>,
-    httpc: Arc<SgxMutex<HttpcReactor>>,
-    raw_req: RawRequest,
-) {
-    let res = match raw_req.extract() {
-        Some(mut req) => {
-            match create_response(req.request().into()) {
-                Ok(res) => {
-                    let (parts, _) = res.into_parts();
-                    let mut res = Response::from_request_and_parts(&req, parts);
-                    let mut ctx: Context = Context::new(httpc);
-
-                    match route_request(&mut req, &mut res, &mut ctx).await {
-                        Ok(_) => res.encode(),
-                        Err(err) => Err(err)
-                    }
-                }
-                Err(err) => {
-                    Err(Error::new_with_kind(
-                        ErrorKind::WSFault,
-                        format!("failed to extract ws request - {:?}", err),
-                    ))
-                }
-            }
-        }
-        None => {
-            Err(Error::new_with_kind(
-                ErrorKind::ServerFault,
-                "failed to extract ws request from raw request".to_string(),
-            ))
-        }
-    };
-
-    handle_process_raw_request_result("process_ws_raw_request", deferral, res)
-}
-
-fn handle_process_raw_request_result(
-    fn_name: &str,
-    deferral: Arc<SgxMutex<Deferral>>,
-    result: EncodedResponseResult
-) {
     match deferral.lock() {
         Ok(mut deferral) => {
             deferral.defer(Arc::new(move |conn| {
@@ -114,7 +90,7 @@ fn handle_process_raw_request_result(
         }
         Err(err) => {
             warn!("failed to acquire lock on 'deferral' \
-                    during {}: {:?}", fn_name, err);
+                    during process_raw_request: {:?}", err);
         }
     }
 }
@@ -188,12 +164,14 @@ impl RawRequest {
 
     #[inline]
     pub(crate) fn extract(self) -> Option<Request> {
+        let is_websocket = self.is_upgrade_websocket();
+
         match self.request {
             Some(req) => {
                 let body = self.data.to_vec();
                 let req = req.body(()).ok()?;
 
-                Some(Request::new(req, body))
+                Some(Request::new(req, body, is_websocket))
             }
             None => None,
         }
@@ -291,12 +269,22 @@ pub(crate) struct Request {
     req: http::Request<()>,
     body: Vec<u8>,
     vars: Option<HashMap<String, String>>,
+    websocket: bool,
 }
 
 impl Request {
     #[inline]
-    pub(crate) fn new(req: http::Request<()>, body: Vec<u8>) -> Self {
-        Self { req, body, vars: None }
+    pub(crate) fn new(
+        req: http::Request<()>,
+        body: Vec<u8>,
+        websocket: bool
+    ) -> Self {
+        Self { req, body, vars: None, websocket }
+    }
+
+    #[inline]
+    pub fn is_websocket(&self) -> bool {
+        self.websocket
     }
 
     #[inline]

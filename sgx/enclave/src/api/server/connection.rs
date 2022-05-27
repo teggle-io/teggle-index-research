@@ -6,7 +6,7 @@ use core::future::Future;
 use core::ops::Add;
 
 use futures::future::BoxFuture;
-use futures::{FutureExt};
+use futures::FutureExt;
 use log::{trace, warn};
 use mio::event::{Event, Evented};
 use mio::net::TcpStream;
@@ -19,7 +19,7 @@ use std::sync::SgxMutex;
 use std::time::Instant;
 
 use crate::api::{
-    handler::request::{RawRequest, process_raw_request, process_ws_raw_request},
+    handler::request::{process_raw_request, RawRequest},
     handler::response::Response,
     reactor::exec::ExecReactor,
     reactor::httpc::HttpcReactor,
@@ -33,9 +33,9 @@ pub(crate) struct Connection {
     socket: TcpStream,
     session: rustls::ServerSession,
     config: Arc<Config>,
+    deferral: Arc<SgxMutex<Deferral>>,
     exec: Arc<SgxMutex<ExecReactor>>,
     httpc: Arc<SgxMutex<HttpcReactor>>,
-    deferral: Arc<SgxMutex<Deferral>>,
     request: Option<RawRequest>,
     upgraded: bool,
     closing: bool,
@@ -68,6 +68,7 @@ impl Connection {
         }
     }
 
+    #[inline]
     pub(crate) fn ready(&mut self, poll: &mut mio::Poll, ev: &Event, is_wakeup: bool) {
         if is_wakeup {
             self.wake(poll);
@@ -95,6 +96,7 @@ impl Connection {
         }
     }
 
+    #[inline]
     fn wake(&mut self, poll: &mut mio::Poll) {
         let pending = match self.deferral.lock() {
             Ok(mut deferral) => {
@@ -132,6 +134,7 @@ impl Connection {
         }
     }
 
+    #[inline]
     fn handle_request(&mut self, poll: &mut mio::Poll) {
         let config = self.config.clone();
 
@@ -192,22 +195,20 @@ impl Connection {
         }
     }
 
+    #[inline]
     fn process_request(&mut self, poll: &mut mio::Poll, req: RawRequest) {
         let deferral = self.deferral.clone();
         let httpc = self.httpc.clone();
 
         if let Err(err) = self.spawn(poll, async move {
-            if req.is_upgrade_websocket() {
-                process_ws_raw_request(deferral, httpc, req).await
-            } else {
-                process_raw_request(deferral, httpc, req).await
-            };
+            process_raw_request(deferral, httpc, req).await
         }) {
             self.handle_error(&err, true);
         }
     }
 
     // Spawn an async function.
+    #[inline]
     fn spawn(&mut self, poll: &mut mio::Poll, future: impl Future<Output=()> + 'static + Send) -> Result<(), Error> {
         match self.exec.lock() {
             Ok(mut exec) => {
@@ -220,6 +221,12 @@ impl Connection {
             }
         }
 
+        Ok(())
+    }
+
+    // Web Socket
+    #[inline]
+    pub(crate) fn subscribe(&self, _future: Arc<SgxMutex<BoxFuture<'static, ()>>>) -> Result<(), Error>  {
         Ok(())
     }
 
@@ -249,12 +256,8 @@ impl Connection {
         }
     }
 
+    #[inline]
     fn handle_io_error(&mut self, err: io::Error) {
-        if self.is_closed() {
-            // Abort, stale connection.
-            return;
-        }
-
         if let Some(err) = err.into_inner() {
             let inner: Option<&Box<Error>> = err.as_ref().downcast_ref();
             if inner.is_some() {
@@ -263,14 +266,15 @@ impl Connection {
         }
     }
 
+    #[inline]
     pub(crate) fn handle_error(&mut self, err: &Error, push: bool) {
-        if self.is_closed() {
-            // Abort, stale connection.
-            return;
-        }
-
         warn!("failed to handle request: {}", err);
         self.request = None;
+
+        if self.is_closed() {
+            // Abort early, stale connection.
+            return;
+        }
 
         match Response::from_error(err).encode() {
             Ok(res) => {
@@ -282,17 +286,20 @@ impl Connection {
         }
     }
 
+    #[inline]
     fn read_to_end(&mut self, buf: &mut Vec<u8>, bytes_read: usize) -> std::io::Result<usize> {
         read_to_end(&mut self.session, buf,
                     self.config.max_bytes_received(), bytes_read)
     }
 
+    #[inline]
     fn close(&mut self) {
         self.send_close_notify();
         let _ = self.socket.shutdown(Shutdown::Both);
         self.closed = true;
     }
 
+    #[inline]
     fn send_close_notify(&mut self) {
         if !self.close_notify_sent {
             self.session.send_close_notify();
@@ -300,6 +307,7 @@ impl Connection {
         }
     }
 
+    #[inline]
     pub(crate) fn register(&self, poll: &mut mio::Poll) {
         match self.deferral.lock() {
             Ok(deferral) => {
@@ -319,6 +327,7 @@ impl Connection {
             .unwrap();
     }
 
+    #[inline]
     fn reregister(&self, poll: &mut mio::Poll) {
         poll.reregister(&self.socket,
                         self.token,
@@ -327,6 +336,7 @@ impl Connection {
             .unwrap();
     }
 
+    #[inline]
     fn deregister(&self, poll: &mut mio::Poll) {
         poll.deregister(&self.socket)
             .unwrap();
@@ -343,6 +353,7 @@ impl Connection {
         }
     }
 
+    #[inline]
     fn event_set(&self) -> mio::Ready {
         let rd = self.session.wants_read();
         let wr = self.session.wants_write();
@@ -426,11 +437,13 @@ impl Connection {
         }
     }
 
+    #[inline]
     fn write_tls(&mut self) -> io::Result<usize> {
         self.session
             .write_tls(&mut self.socket)
     }
 
+    #[inline]
     fn write_tls_and_handle_error(&mut self) {
         let rc = self.write_tls();
         if rc.is_err() {
@@ -439,18 +452,22 @@ impl Connection {
         }
     }
 
+    #[inline]
     pub(crate) fn is_closing(&self) -> bool {
         self.closing
     }
 
+    #[inline]
     pub(crate) fn set_closing(&mut self, closing: bool) {
         self.closing = closing;
     }
 
+    #[inline]
     pub(crate) fn is_closed(&self) -> bool {
         self.closed
     }
 
+    #[inline]
     pub(crate) fn upgrade(&mut self, req: &RawRequest) {
         if self.upgraded {
             return;
@@ -463,6 +480,7 @@ impl Connection {
         self.upgraded = true;
     }
 
+    #[inline]
     pub(crate) fn set_keepalive(&self) {
         match self.socket.set_keepalive(Some(self.config.keep_alive_time())) {
             Ok(_) => {}
@@ -507,6 +525,7 @@ impl Deferral {
         }
     }
 
+    #[inline]
     pub(crate) fn defer(&mut self, defer: Arc<dyn Send + Sync + for<'a> Fn(&'a mut Connection) -> Result<(), Error>>) {
         self.defers.push(defer);
         if let Err(err) = self.waker.trigger() {
@@ -514,6 +533,7 @@ impl Deferral {
         }
     }
 
+    #[inline]
     pub(crate) fn spawn(&mut self, future: impl Future<Output=()> + 'static + Send) {
         self.futures.push(future.boxed());
         if let Err(err) = self.waker.trigger() {
@@ -521,14 +541,17 @@ impl Deferral {
         }
     }
 
+    #[inline]
     pub(crate) fn register(&self, poll: &mut mio::Poll) -> std::io::Result<()> {
         self.waker.register(poll)
     }
 
+    #[inline]
     pub(crate) fn deregister(&self, poll: &mut mio::Poll) -> std::io::Result<()> {
         self.waker.deregister(poll)
     }
 
+    #[inline]
     fn take_pending(&mut self) -> (
         Vec<Arc<dyn Send + Sync + for<'a> Fn(&'a mut Connection) -> Result<(), Error>>>,
         Vec<BoxFuture<'static, ()>>

@@ -1,7 +1,10 @@
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::future::Future;
 use core::str::FromStr;
+use futures::future::BoxFuture;
+use futures::FutureExt;
 
 use mio_httpc::{CallBuilder, Method};
 use std::collections::HashMap;
@@ -9,33 +12,67 @@ use std::sync::SgxMutex;
 
 use crate::api::reactor::httpc::{HttpcCallFuture, HttpcReactor};
 use crate::api::results::{Error, ErrorKind};
+use crate::api::server::connection::Deferral;
 
 const FETCH_DEFAULT_TIMEOUT_MS: u64 = 2500;
 
 pub(crate) struct Context {
     data: HashMap<String, String>,
+    deferral: Arc<SgxMutex<Deferral>>,
     httpc: Arc<SgxMutex<HttpcReactor>>,
 }
 
 #[allow(dead_code)]
 impl Context {
     #[inline]
-    pub(crate) fn new(httpc: Arc<SgxMutex<HttpcReactor>>) -> Self {
+    pub(crate) fn new(
+        deferral: Arc<SgxMutex<Deferral>>,
+        httpc: Arc<SgxMutex<HttpcReactor>>,
+    ) -> Self {
         Self {
             data: HashMap::new(),
+            deferral,
             httpc,
         }
     }
 
+    // Web Sockets
+
+    pub fn subscribe(&self, future: impl Future<Output=()> + 'static + Send + Sync) -> Result<(), Error> {
+        let future = Arc::new(SgxMutex::new(future.boxed()));
+
+        return match self.deferral.lock() {
+            Ok(mut deferral) => {
+                deferral.defer(Arc::new(move |conn| {
+                    conn.subscribe(Arc::clone(&future))
+                }));
+
+                Ok(())
+            }
+            Err(err) => {
+                Err(Error::new_with_kind(
+                    ErrorKind::ExecError,
+                    format!("failed to acquire lock on 'deferral' during Context->subscribe: {:?}", err),
+                ))
+            }
+        };
+    }
+
+    pub fn send(&self) {}
+
+    // HTTP Client
+
     #[inline]
-    pub fn http(&mut self) -> HttpFetchBuilder {
+    pub fn http(&self) -> HttpFetchBuilder {
         HttpFetchBuilder::http(self.httpc.clone())
     }
 
     #[inline]
-    pub fn https(&mut self) -> HttpFetchBuilder {
+    pub fn https(&self) -> HttpFetchBuilder {
         HttpFetchBuilder::https(self.httpc.clone())
     }
+
+    // Context Data
 
     #[inline]
     pub fn insert<S>(&mut self, key: S, value: S) -> &mut Self
