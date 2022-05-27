@@ -19,6 +19,7 @@ use crate::api::handler::router::route_request;
 use crate::api::reactor::httpc::HttpcReactor;
 use crate::api::results::{EncodedResponseResult, Error, ErrorKind, too_many_bytes_err};
 use crate::api::server::config::Config;
+use crate::api::server::connection::Deferral;
 
 pub(crate) static UPGRADE_OPT_KEEPALIVE: u8 = 2;
 pub(crate) static UPGRADE_OPT_WEBSOCKET: u8 = 3;
@@ -29,17 +30,19 @@ static HEADER_CONNECTION_UPGRADE: &str = "upgrade";
 static HEADER_UPGRADE_WEBSOCKET: &str = "websocket";
 
 pub(crate) async fn process_raw_request(
+    deferral: Arc<SgxMutex<Deferral>>,
     httpc: Arc<SgxMutex<HttpcReactor>>,
-    raw_req: RawRequest,
-) -> EncodedResponseResult {
-    return match raw_req.extract() {
+    raw_req: RawRequest
+) {
+    let res = match raw_req.extract() {
         Some(mut req) => {
             let mut res = Response::from_request(&req);
             let mut ctx: Context = Context::new(httpc);
 
-            route_request(&mut req, &mut res, &mut ctx).await?;
-
-            res.encode()
+            match route_request(&mut req, &mut res, &mut ctx).await {
+                Ok(_) => res.encode(),
+                Err(err) => Err(err)
+            }
         }
         None => {
             Err(Error::new_with_kind(
@@ -47,24 +50,28 @@ pub(crate) async fn process_raw_request(
                 "failed to extract request from raw request".to_string(),
             ))
         }
-    }
+    };
+
+    handle_process_raw_request_result("process_raw_request", deferral, res)
 }
 
 pub(crate) async fn process_ws_raw_request(
+    deferral: Arc<SgxMutex<Deferral>>,
     httpc: Arc<SgxMutex<HttpcReactor>>,
     raw_req: RawRequest,
-) -> EncodedResponseResult {
-    return match raw_req.extract() {
+) {
+    let res = match raw_req.extract() {
         Some(mut req) => {
-            return match create_response(req.request().into()) {
+            match create_response(req.request().into()) {
                 Ok(res) => {
                     let (parts, _) = res.into_parts();
                     let mut res = Response::from_request_and_parts(&req, parts);
                     let mut ctx: Context = Context::new(httpc);
 
-                    route_request(&mut req, &mut res, &mut ctx).await?;
-
-                    res.encode()
+                    match route_request(&mut req, &mut res, &mut ctx).await {
+                        Ok(_) => res.encode(),
+                        Err(err) => Err(err)
+                    }
                 }
                 Err(err) => {
                     Err(Error::new_with_kind(
@@ -79,6 +86,35 @@ pub(crate) async fn process_ws_raw_request(
                 ErrorKind::ServerFault,
                 "failed to extract ws request from raw request".to_string(),
             ))
+        }
+    };
+
+    handle_process_raw_request_result("process_ws_raw_request", deferral, res)
+}
+
+fn handle_process_raw_request_result(
+    fn_name: &str,
+    deferral: Arc<SgxMutex<Deferral>>,
+    result: EncodedResponseResult
+) {
+    match deferral.lock() {
+        Ok(mut deferral) => {
+            deferral.defer(Arc::new(move |conn| {
+                match &result {
+                    Ok(res) => {
+                        conn.send_response(res, true);
+                    }
+                    Err(err) => {
+                        conn.handle_error(&err, true);
+                    }
+                }
+
+                Ok(())
+            }));
+        }
+        Err(err) => {
+            warn!("failed to acquire lock on 'deferral' \
+                    during {}: {:?}", fn_name, err);
         }
     }
 }

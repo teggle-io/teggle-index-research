@@ -32,7 +32,10 @@ impl ExecReactor {
     }
 
     pub(crate) fn spawn(&mut self, poll: &mut mio::Poll, future: impl Future<Output=()> + 'static + Send) {
-        let future = future.boxed();
+        self.spawn(poll, future.boxed())
+    }
+
+    pub(crate) fn spawn_boxed(&mut self, poll: &mut mio::Poll, future: BoxFuture<'static, ()>) {
         let token = Token(self.next_id);
 
         if self.next_id + 1 >= (self.offset + u32::MAX as usize) {
