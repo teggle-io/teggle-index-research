@@ -53,9 +53,8 @@ fn build_routes() -> Router {
             res.ok("Ok")
         }));
 
-        r.get("/fetch", |
-            ctx: &mut Context,
-            res: &mut Response,
+        r.get("/fetch", |ctx: &mut Context,
+                         res: &mut Response,
         | Box::pin(async move {
             let resp = ctx.https()
                 .host("catfact.ninja")
@@ -93,8 +92,10 @@ fn build_routes() -> Router {
     }));
 
     r.get("/ws", |ctx: &mut Context, _res| Box::pin(async move {
-        ctx.subscribe(|_ctx| Box::pin(async move {
-           info!("WS MSG");
+        ctx.subscribe(|ctx| Box::pin(async move {
+            info!("WS MSG");
+
+            ctx.send(b"Hello, World".to_vec())?;
 
             Ok(())
         }))?;
