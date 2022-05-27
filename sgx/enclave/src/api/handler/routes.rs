@@ -27,7 +27,7 @@ fn build_routes() -> Router {
     r.route("/test", |mut r| {
         r.require(|ctx, res, next| Box::pin(async move {
             //info!("inside test");
-            ctx.insert("test", "value");
+            ctx.insert("test", Box::new("value"));
 
             next(ctx, res).await
         }));
@@ -43,7 +43,7 @@ fn build_routes() -> Router {
         r.post("/post", |ctx, res| Box::pin(async move {
             let req = ctx.request();
             let content_type: Option<String> = req.header(http::header::CONTENT_TYPE);
-            let test_val: Option<String> = ctx.get("test");
+            let test_val: Option<&String> = ctx.get("test");
             let payload: TestPayload = req.json()?;
 
             error!("Content-Type: {:?}", content_type);
@@ -90,6 +90,16 @@ fn build_routes() -> Router {
         let b: Option<u32> = req.var("b");
 
         res.ok(format!("Sum {}", a.unwrap() + b.unwrap()).as_str())
+    }));
+
+    r.get("/ws", |ctx: &mut Context, _res| Box::pin(async move {
+        ctx.subscribe(|_ctx| Box::pin(async move {
+           info!("WS MSG");
+
+            Ok(())
+        }))?;
+
+        Ok(())
     }));
 
     r

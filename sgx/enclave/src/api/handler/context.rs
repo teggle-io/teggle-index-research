@@ -1,26 +1,31 @@
-use alloc::string::{String, ToString};
+use alloc::boxed::Box;
+use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::future::Future;
-use core::str::FromStr;
-use futures::FutureExt;
+use core::any::Any;
 
+use futures::future::BoxFuture;
 use mio_httpc::{CallBuilder, Method};
 use std::collections::HashMap;
 use std::sync::SgxMutex;
-use crate::api::handler::request::Request;
 
+use crate::api::handler::request::Request;
 use crate::api::reactor::httpc::{HttpcCallFuture, HttpcReactor};
 use crate::api::results::{Error, ErrorKind};
 use crate::api::server::connection::Deferral;
 
 const FETCH_DEFAULT_TIMEOUT_MS: u64 = 2500;
 
-pub(crate) struct Context {
+pub(crate) type SubscriptionHandler = Arc<dyn Send + Sync + for<'a> Fn(&'a mut Context) -> BoxFuture<'a, Result<(), Error>>>;
+pub(crate) type SubscriptionHandlerFn = for<'a> fn(&'a mut Context) -> BoxFuture<'a, Result<(), Error>>;
+
+type ContextValue = dyn Any + Sync + Send + 'static;
+
+pub struct Context {
     request: Request,
     deferral: Arc<SgxMutex<Deferral>>,
     httpc: Arc<SgxMutex<HttpcReactor>>,
-    data: HashMap<String, String>,
+    data: HashMap<&'static str, Box<ContextValue>>,
 }
 
 #[allow(dead_code)]
@@ -49,27 +54,45 @@ impl Context {
 
     // Web Sockets
 
-    pub fn subscribe(&self, future: impl Future<Output=()> + 'static + Send + Sync) -> Result<(), Error> {
-        let future = Arc::new(SgxMutex::new(future.boxed()));
+    pub fn subscribe(&self, handler: SubscriptionHandlerFn) -> Result<(), Error> {
+        if !self.request.is_websocket() {
+            return Err(Error::new_with_kind(
+                ErrorKind::WSFault,
+                format!("attempt to call Context->subscribe when request is not a web socket"),
+            ));
+        }
+
+        let handler = Arc::new(handler);
 
         return match self.deferral.lock() {
             Ok(mut deferral) => {
                 deferral.defer(Arc::new(move |conn| {
-                    conn.subscribe(Arc::clone(&future))
+                    conn.subscribe(handler.clone())
                 }));
 
                 Ok(())
             }
             Err(err) => {
                 Err(Error::new_with_kind(
-                    ErrorKind::ExecError,
+                    ErrorKind::WSFault,
                     format!("failed to acquire lock on 'deferral' during Context->subscribe: {:?}", err),
                 ))
             }
         };
     }
 
-    pub fn send(&self) {}
+    pub fn send(&self, data: Vec<u8>) -> Result<(), Error> {
+        if !self.request.is_websocket() {
+            return Err(Error::new_with_kind(
+                ErrorKind::WSFault,
+                format!("attempt to call Context->send when request is not a web socket"),
+            ));
+        }
+
+        // TODO:
+
+        Ok(())
+    }
 
     // HTTP Client
 
@@ -86,36 +109,24 @@ impl Context {
     // Context Data
 
     #[inline]
-    pub fn insert<S>(&mut self, key: S, value: S) -> &mut Self
-        where
-            S: Into<String>,
-    {
-        let key = key.into();
-        let value = value.into();
-
+    pub fn insert(&mut self, key: &'static str, value: Box<ContextValue>) -> &mut Self {
         self.data.insert(key, value);
         self
     }
 
     #[inline]
-    pub fn get<R, S>(&self, key: S) -> Option<R>
+    pub fn get<V>(&self, key: &'static str) -> Option<&V>
         where
-            R: FromStr,
-            S: Into<String>,
+            V: 'static
     {
-        let key = key.into();
-        self.data.get(&key)?
-            .parse()
-            .ok()
+        Some(
+            self.data.get(&key)?
+                .downcast_ref()?
+        )
     }
 
     #[inline]
-    pub fn contains_key<S>(&mut self, key: S) -> bool
-        where
-            S: Into<String>,
-    {
-        let key = key.into();
-
+    pub fn contains_key(&mut self, key: &'static str) -> bool {
         self.data.contains_key(&key)
     }
 }

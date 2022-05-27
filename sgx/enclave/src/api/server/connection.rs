@@ -27,6 +27,7 @@ use crate::api::{
     results::{Error, ErrorKind, ResponseBody, too_many_bytes_err},
     server::config::Config,
 };
+use crate::api::handler::context::SubscriptionHandler;
 
 pub(crate) struct Connection {
     token: mio::Token,
@@ -226,7 +227,7 @@ impl Connection {
 
     // Web Socket
     #[inline]
-    pub(crate) fn subscribe(&self, _future: Arc<SgxMutex<BoxFuture<'static, ()>>>) -> Result<(), Error>  {
+    pub(crate) fn subscribe(&self, _handler: SubscriptionHandler) -> Result<(), Error>  {
         Ok(())
     }
 

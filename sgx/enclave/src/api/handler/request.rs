@@ -265,7 +265,7 @@ impl RawRequest {
     }
 }
 
-pub(crate) struct Request {
+pub struct Request {
     req: http::Request<()>,
     body: Vec<u8>,
     vars: Option<HashMap<String, String>>,

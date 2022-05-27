@@ -112,6 +112,7 @@ impl Response {
         }
     }
 
+    #[inline]
     pub fn ok(&mut self, msg: &str) -> Result<(), Error> {
         self.json(&Msg { message: msg.to_string() }).unwrap();
         self.status(StatusCode::OK);
@@ -119,6 +120,7 @@ impl Response {
         Ok(())
     }
 
+    #[inline]
     pub fn error(&mut self, status: StatusCode, msg: &str) -> Result<(), Error> {
         self.json(&ErrorMsg { status: u16::from(status), message: msg.to_string() }).unwrap();
         self.status(status);
@@ -126,11 +128,13 @@ impl Response {
         Ok(())
     }
 
+    #[inline]
     pub fn fault(&mut self) -> Result<(), Error> {
         self.error(StatusCode::INTERNAL_SERVER_ERROR,
                    "Server Fault")
     }
 
+    #[inline]
     pub fn encode(self) -> EncodedResponseResult {
         match self.body_bytes {
             Some(body) => {
