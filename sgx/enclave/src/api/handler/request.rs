@@ -6,6 +6,7 @@ use core::str::FromStr;
 use bytes::BytesMut;
 use http::{Extensions, HeaderMap, HeaderValue, Method, Uri, Version};
 use http::header::AsHeaderName;
+use http::request::Builder;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::sync::SgxMutex;
@@ -20,9 +21,6 @@ use crate::api::reactor::httpc::HttpcReactor;
 use crate::api::results::{Error, ErrorKind, too_many_bytes_err};
 use crate::api::server::config::Config;
 use crate::api::server::connection::Deferral;
-
-pub(crate) static UPGRADE_OPT_KEEPALIVE: u8 = 2;
-pub(crate) static UPGRADE_OPT_WEBSOCKET: u8 = 3;
 
 static HEADER_CONNECTION_KEEPALIVE: &str = "keep-alive";
 static HEADER_CONNECTION_UPGRADE: &str = "upgrade";
@@ -78,10 +76,10 @@ pub(crate) async fn process_raw_request(
             deferral.defer(Arc::new(move |conn| {
                 match &result {
                     Ok(res) => {
-                        conn.send_response(res, true);
+                        conn.send_response(res);
                     }
                     Err(err) => {
-                        conn.handle_error(&err, true);
+                        conn.handle_error(&err);
                     }
                 }
 
@@ -102,8 +100,8 @@ pub(crate) struct RawRequest {
     bytes: usize,
     timeout: Option<Instant>,
     // Cached
+    upgrade_websocket: bool,
     content_length: usize,
-    upgrade_opts: u8,
 }
 
 impl RawRequest {
@@ -114,8 +112,8 @@ impl RawRequest {
             bytes: data.len(),
             data: BytesMut::from(data.as_slice()),
             timeout: Some(timeout),
+            upgrade_websocket: false,
             content_length: 0,
-            upgrade_opts: 0,
         };
         req.try_decode()?;
 
@@ -153,25 +151,13 @@ impl RawRequest {
     }
 
     #[inline]
-    pub fn is_upgrade_keepalive(&self) -> bool {
-        self.upgrade_opts & UPGRADE_OPT_KEEPALIVE > 0
-    }
-
-    #[inline]
-    pub fn is_upgrade_websocket(&self) -> bool {
-        self.upgrade_opts & UPGRADE_OPT_WEBSOCKET > 0
-    }
-
-    #[inline]
     pub(crate) fn extract(self) -> Option<Request> {
-        let is_websocket = self.is_upgrade_websocket();
-
         match self.request {
             Some(req) => {
                 let body = self.data.to_vec();
                 let req = req.body(()).ok()?;
 
-                Some(Request::new(req, body, is_websocket))
+                Some(Request::new(req, body, self.upgrade_websocket))
             }
             None => None,
         }
@@ -229,19 +215,11 @@ impl RawRequest {
 
     #[inline]
     fn extract_upgrade_opts(&mut self) {
-        self.upgrade_opts = 0;
-
         if let Some(req) = self.request.as_ref() {
             if let Some(headers) = req.headers_ref() {
-                if has_header(headers, http::header::CONNECTION, HEADER_CONNECTION_KEEPALIVE)
-                    || has_header(headers, http::header::CONNECTION, HEADER_CONNECTION_UPGRADE) {
-                    // Not sure this is really needed (I think this happens anyway).
-                    self.upgrade_opts |= UPGRADE_OPT_KEEPALIVE;
-                }
-
                 if has_header(headers, http::header::CONNECTION, HEADER_CONNECTION_UPGRADE)
                     && has_header(headers, http::header::UPGRADE, HEADER_UPGRADE_WEBSOCKET) {
-                    self.upgrade_opts |= UPGRADE_OPT_WEBSOCKET;
+                    self.upgrade_websocket = true;
                 }
             }
         }

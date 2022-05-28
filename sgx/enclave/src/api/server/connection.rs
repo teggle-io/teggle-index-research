@@ -1,5 +1,5 @@
 use alloc::boxed::Box;
-use alloc::string::{String, ToString};
+use alloc::string::{ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::future::Future;
@@ -114,7 +114,7 @@ impl Connection {
                 match defer(self) {
                     Ok(_) => {}
                     Err(err) => {
-                        self.handle_error(&err, true);
+                        self.handle_error(&err);
                     }
                 }
             }
@@ -155,12 +155,12 @@ impl Connection {
         }
 
         if request_body.len() > 0 {
-            trace!("req body: {:?}", String::from_utf8(request_body.clone()));
+            //trace!("req body: {:?}", String::from_utf8(request_body.clone()));
 
             // Consume request body.
             if let Some(req) = &mut self.request {
                 if let Err(err) = req.next(request_body) {
-                    self.handle_error(&err, false);
+                    self.handle_error(&err);
                     return;
                 }
             } else {
@@ -171,7 +171,7 @@ impl Connection {
                         self.request = Some(req);
                     }
                     Err(err) => {
-                        self.handle_error(&err, false);
+                        self.handle_error(&err);
                         return;
                     }
                 }
@@ -179,19 +179,32 @@ impl Connection {
 
             if let Some(req) = self.request.take() {
                 if let Err(err) = req.validate(config) {
-                    self.handle_error(&err, false);
+                    self.handle_error(&err);
                     return;
                 }
-
-                self.upgrade(&req);
 
                 // Ready?
                 if req.ready() {
                     self.process_request(poll, req);
+                    //self.send_mock_response();
                 } else {
                     self.request = Some(req);
                 }
             }
+        }
+    }
+
+    #[inline]
+    #[allow(dead_code)]
+    fn send_mock_response(&mut self) {
+        let response =
+            b"HTTP/1.1 200 OK\r\nContent-Length: 68\r\n\r\nHello world from rustls tlsserverHello world from rustls tlsserver\r\n";
+
+        self.write(&response[..]);
+
+        self.write_tls_and_handle_error();
+        if self.is_closing() {
+            self.close();
         }
     }
 
@@ -203,7 +216,7 @@ impl Connection {
         if let Err(err) = self.spawn(poll, async move {
             process_raw_request(deferral, httpc, req).await
         }) {
-            self.handle_error(&err, true);
+            self.handle_error(&err);
         }
     }
 
@@ -231,7 +244,7 @@ impl Connection {
     }
 
     // Tls Session Related
-    pub(crate) fn send_response(&mut self, res: &ResponseBody, push: bool) {
+    pub(crate) fn send_response(&mut self, res: &ResponseBody) {
         if self.is_closed() {
             // Abort, stale connection.
             return;
@@ -239,20 +252,16 @@ impl Connection {
 
         let body = res.body();
 
+        /*
         if body.len() > 0 {
             trace!("res body: {:?}", String::from_utf8(body.clone()));
         }
+        */
 
         self.write(&body[..]);
 
         if res.close() {
             self.send_close_notify();
-        }
-        if push {
-            self.write_tls_and_handle_error();
-            if self.is_closing() {
-                self.close();
-            }
         }
     }
 
@@ -261,13 +270,13 @@ impl Connection {
         if let Some(err) = err.into_inner() {
             let inner: Option<&Box<Error>> = err.as_ref().downcast_ref();
             if inner.is_some() {
-                self.handle_error(inner.unwrap(), false);
+                self.handle_error(inner.unwrap());
             }
         }
     }
 
     #[inline]
-    pub(crate) fn handle_error(&mut self, err: &Error, push: bool) {
+    pub(crate) fn handle_error(&mut self, err: &Error) {
         warn!("failed to handle request: {}", err);
         self.request = None;
 
@@ -278,7 +287,7 @@ impl Connection {
 
         match Response::from_error(err).encode() {
             Ok(res) => {
-                self.send_response(&res, push);
+                self.send_response(&res);
             }
             Err(err) => {
                 warn!("failed to encode response while handling error: {:?}", err)
@@ -367,7 +376,7 @@ impl Connection {
                 if io_state.plaintext_bytes_to_read() + bytes_read > self.config.max_bytes_received() {
                     self.handle_error(&too_many_bytes_err(
                         io_state.plaintext_bytes_to_read() + bytes_read,
-                        self.config.max_bytes_received()), true);
+                        self.config.max_bytes_received()));
                     return 0;
                 }
 
@@ -478,32 +487,6 @@ impl Connection {
         self.closed
     }
 
-    #[inline]
-    pub(crate) fn upgrade(&mut self, req: &RawRequest) {
-        if self.upgraded {
-            return;
-        }
-
-        if req.is_upgrade_keepalive() {
-            self.set_keepalive();
-        }
-
-        self.upgraded = true;
-    }
-
-    #[inline]
-    pub(crate) fn set_keepalive(&self) {
-        match self.socket.set_keepalive(Some(self.config.keep_alive_time())) {
-            Ok(_) => {}
-            Err(e) => {
-                warn!("failed to set keepalive during socket upgrade: {:?}", e);
-                return;
-            }
-        }
-
-        trace!("upgraded socket with keepalive: {:?}", self.config.keep_alive_time());
-    }
-
     pub fn check_timeout(&mut self, poll: &mut mio::Poll, now: &Instant) {
         if let Some(req) = self.request.as_ref() {
             if req.check_timeout(now) {
@@ -511,7 +494,7 @@ impl Connection {
                     &Error::new_with_kind(
                         ErrorKind::TimedOut,
                         "request timed out".to_string(),
-                    ), true,
+                    ),
                 );
                 self.write_tls_and_handle_error();
                 self.close();
