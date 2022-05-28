@@ -3,6 +3,7 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::future::Future;
+use core::ops::Add;
 
 use futures::future::BoxFuture;
 use futures::FutureExt;
@@ -10,9 +11,8 @@ use log::{trace, warn};
 use mio::event::{Event, Evented};
 use mio::net::TcpStream;
 use mio::Token;
-use rustls::Session;
 use std::io;
-use std::io::{ErrorKind as StdErrorKind, Read, Write};
+use std::io::{Read, Write};
 use std::net::Shutdown;
 use std::sync::SgxMutex;
 use std::time::Instant;
@@ -31,7 +31,7 @@ use crate::api::handler::context::SubscriptionHandler;
 pub(crate) struct Connection {
     token: mio::Token,
     socket: TcpStream,
-    session: rustls::ServerSession,
+    tls_conn: rustls::ServerConnection,
     config: Arc<Config>,
     deferral: Arc<SgxMutex<Deferral>>,
     exec: Arc<SgxMutex<ExecReactor>>,
@@ -47,7 +47,7 @@ impl Connection {
     pub(crate) fn new(
         conn_id: usize,
         socket: TcpStream,
-        session: rustls::ServerSession,
+        tls_conn: rustls::ServerConnection,
         config: Arc<Config>,
         exec: Arc<SgxMutex<ExecReactor>>,
         httpc: Arc<SgxMutex<HttpcReactor>>,
@@ -55,7 +55,7 @@ impl Connection {
         Self {
             token: Token(conn_id),
             socket,
-            session,
+            tls_conn,
             config,
             exec,
             httpc,
@@ -155,18 +155,6 @@ impl Connection {
         }
 
         if request_body.len() > 0 {
-            let response =
-                b"HTTP/1.1 200 OK\r\nContent-Length: 68\r\n\r\nHello world from rustls tlsserverHello world from rustls tlsserver\r\n";
-
-            self.write(&response[..]);
-
-            self.write_tls_and_handle_error();
-            if self.is_closing() {
-                self.close();
-            }
-            // END TESTING
-
-            /*
             trace!("req body: {:?}", String::from_utf8(request_body.clone()));
 
             // Consume request body.
@@ -204,8 +192,6 @@ impl Connection {
                     self.request = Some(req);
                 }
             }
-
-             */
         }
     }
 
@@ -301,12 +287,6 @@ impl Connection {
     }
 
     #[inline]
-    fn read_to_end(&mut self, buf: &mut Vec<u8>, bytes_read: usize) -> std::io::Result<usize> {
-        read_to_end(&mut self.session, buf,
-                    self.config.max_bytes_received(), bytes_read)
-    }
-
-    #[inline]
     fn close(&mut self) {
         self.send_close_notify();
         let _ = self.socket.shutdown(Shutdown::Both);
@@ -316,7 +296,7 @@ impl Connection {
     #[inline]
     fn send_close_notify(&mut self) {
         if !self.close_notify_sent {
-            self.session.send_close_notify();
+            self.tls_conn.send_close_notify();
             self.close_notify_sent = true;
         }
     }
@@ -369,8 +349,8 @@ impl Connection {
 
     #[inline]
     fn event_set(&self) -> mio::Ready {
-        let rd = self.session.wants_read();
-        let wr = self.session.wants_write();
+        let rd = self.tls_conn.wants_read();
+        let wr = self.tls_conn.wants_write();
 
         if rd && wr {
             mio::Ready::readable() | mio::Ready::writable()
@@ -382,30 +362,47 @@ impl Connection {
     }
 
     fn read(&mut self, plaintext: &mut Vec<u8>, bytes_read: usize) -> isize {
-        match self.read_to_end(plaintext, bytes_read) {
-            Err(err) => {
-                if let io::ErrorKind::ConnectionAborted = err.kind() {
-                    self.handle_io_error(err);
+        if let Ok(io_state) = self.tls_conn.process_new_packets() {
+            if io_state.plaintext_bytes_to_read() > 0 {
+                if io_state.plaintext_bytes_to_read() + bytes_read > self.config.max_bytes_received() {
+                    self.handle_error(&too_many_bytes_err(
+                        io_state.plaintext_bytes_to_read() + bytes_read,
+                        self.config.max_bytes_received()), true);
                     return 0;
                 }
 
-                warn!("plaintext read error: {:?}", err);
-                return -1;
-            }
-            Ok(_) => {
-                plaintext.len() as isize
+                plaintext.resize(io_state.plaintext_bytes_to_read(), 0u8);
+
+                return match self.tls_conn.reader().read_exact(plaintext) {
+                    Err(err) => {
+                        if let io::ErrorKind::ConnectionAborted = err.kind() {
+                            trace!("TLS plain read error: ConnectionAborted");
+                            self.handle_io_error(err);
+                            return 0;
+                        }
+
+                        warn!("plaintext read error: {:?}", err);
+                        return -1;
+                    }
+                    Ok(_) => {
+                        plaintext.len() as isize
+                    }
+                }
             }
         }
+
+        0
     }
 
     fn read_tls(&mut self) {
         // Read some TLS data.
-        match self.session.read_tls(&mut self.socket) {
+        match self.tls_conn.read_tls(&mut self.socket) {
             Err(err) => {
                 if let io::ErrorKind::WouldBlock = err.kind() {
                     return;
                 }
                 if let io::ErrorKind::ConnectionAborted = err.kind() {
+                    trace!("TLS read error: ConnectionAborted");
                     self.closing = true;
                     return;
                 }
@@ -416,6 +413,7 @@ impl Connection {
             }
             Ok(0) => {
                 // EOF
+                trace!("TLS read error: EOF");
                 self.closing = true;
                 return;
             }
@@ -423,7 +421,7 @@ impl Connection {
         };
 
         // Process newly-received TLS messages.
-        if let Err(err) = self.session.process_new_packets() {
+        if let Err(err) = self.tls_conn.process_new_packets() {
             warn!("TLS error: {:?}", err);
 
             // last gasp write to send any alerts
@@ -434,26 +432,25 @@ impl Connection {
         }
     }
 
-    fn write(&mut self, plaintext: &[u8]) -> isize {
-        match self.session.write(plaintext) {
+    fn write(&mut self, plaintext: &[u8]) {
+        match self.tls_conn.writer().write_all(plaintext) {
             Err(err) => {
                 if let io::ErrorKind::ConnectionAborted = err.kind() {
+                    trace!("TLS plain write error: ConnectionAborted");
                     self.closing = true;
-                    return -1;
+                    return;
                 }
 
                 warn!("TLS plain write error: {:?}", err);
                 self.closing = true;
-
-                -1
             }
-            Ok(len) => len as isize
+            Ok(_) => {}
         }
     }
 
     #[inline]
     fn write_tls(&mut self) -> io::Result<usize> {
-        self.session
+        self.tls_conn
             .write_tls(&mut self.socket)
     }
 
@@ -577,97 +574,4 @@ impl Deferral {
 
         (std::mem::take(&mut self.defers), std::mem::take(&mut self.futures))
     }
-}
-
-fn too_many_bytes_io_err(bytes: usize, max_bytes: usize) -> std::io::Error {
-    std::io::Error::new(
-        StdErrorKind::ConnectionAborted,
-        Box::new(
-            too_many_bytes_err(bytes, max_bytes)),
-    )
-}
-
-// Copied from std::io::Read::read_to_end to retain performance
-
-struct Guard<'a> {
-    buf: &'a mut Vec<u8>,
-    len: usize,
-}
-
-impl Drop for Guard<'_> {
-    fn drop(&mut self) {
-        unsafe {
-            self.buf.set_len(self.len);
-        }
-    }
-}
-
-// This uses an adaptive system to extend the vector when it fills. We want to
-// avoid paying to allocate and zero a huge chunk of memory if the reader only
-// has 4 bytes while still making large reads if the reader does have a ton
-// of data to return. Simply tacking on an extra DEFAULT_BUF_SIZE space every
-// time is 4,500 times (!) slower than a default reservation size of 32 if the
-// reader has a very small amount of data to return.
-//
-// Because we're extending the buffer with uninitialized data for trusted
-// readers, we need to make sure to truncate that if any of this panics.
-fn read_to_end<R: Read + ?Sized>(
-    r: &mut R,
-    buf: &mut Vec<u8>,
-    max_bytes: usize,
-    bytes_read: usize,
-) -> std::io::Result<usize> {
-    read_to_end_with_reservation(r, buf, |_| 32, max_bytes, bytes_read)
-}
-
-fn read_to_end_with_reservation<R, F>(
-    r: &mut R,
-    buf: &mut Vec<u8>,
-    mut reservation_size: F,
-    max_bytes: usize,
-    bytes_read: usize,
-) -> std::io::Result<usize>
-    where
-        R: Read + ?Sized,
-        F: FnMut(&R) -> usize,
-{
-    let start_len = buf.len();
-    let mut g = Guard { len: buf.len(), buf };
-    let ret;
-    loop {
-        if (g.len + bytes_read) >= max_bytes {
-            return Err(too_many_bytes_io_err(g.len + bytes_read, max_bytes));
-        }
-        if g.len == g.buf.len() {
-            unsafe {
-                // FIXME(danielhenrymantilla): #42788
-                //
-                //   - This creates a (mut) reference to a slice of
-                //     _uninitialized_ integers, which is **undefined behavior**
-                //
-                //   - Only the standard library gets to soundly "ignore" this,
-                //     based on its privileged knowledge of unstable rustc
-                //     internals;
-                g.buf.reserve(reservation_size(r));
-                let capacity = g.buf.capacity();
-                g.buf.set_len(capacity);
-                r.initializer().initialize(&mut g.buf[g.len..]);
-            }
-        }
-
-        match r.read(&mut g.buf[g.len..]) {
-            Ok(0) => {
-                ret = Ok(g.len - start_len);
-                break;
-            }
-            Ok(n) => g.len += n,
-            Err(ref e) if e.kind() == StdErrorKind::Interrupted => {}
-            Err(e) => {
-                ret = Err(e);
-                break;
-            }
-        }
-    }
-
-    ret
 }

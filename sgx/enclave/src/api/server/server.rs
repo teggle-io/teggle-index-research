@@ -94,8 +94,8 @@ impl Server {
             Ok((socket, addr)) => {
                 debug!("[{}] accepted connection: {}", self.id, addr);
 
-                let session = rustls::ServerSession::new(
-                    &self.config.tls_config().clone());
+                let tls_conn = rustls::ServerConnection::new(
+                    Arc::clone(&self.config.tls_config())).unwrap();
 
                 let conn_id = self.next_id;
 
@@ -106,7 +106,7 @@ impl Server {
                 }
 
                 self.connections.insert(conn_id, Connection::new(conn_id,
-                                                                 socket, session,
+                                                                 socket, tls_conn,
                                                                  self.config.clone(),
                                                                  self.exec.clone(),
                                                                  self.httpc.clone()));
