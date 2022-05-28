@@ -187,6 +187,17 @@ impl Server {
     }
 }
 
+#[inline]
+fn create_net_listener(addr: &str) -> std::net::TcpListener {
+    let listener = TcpBuilder::new_v4().unwrap()
+        .reuse_address(true).unwrap()
+        .reuse_port(true).unwrap()
+        .bind(&addr).unwrap()
+        .listen(TCP_BACKLOG).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    listener
+}
+
 pub(crate) fn start_api_server(addr: &str) {
     let config = Arc::new(Config::new(
         MAX_BYTES_RECEIVED,
@@ -195,11 +206,7 @@ pub(crate) fn start_api_server(addr: &str) {
         EXEC_TIMEOUT));
 
     let listener = TcpListener::from_std(
-        TcpBuilder::new_v4().unwrap()
-            .reuse_address(true).unwrap()
-            .reuse_port(true).unwrap()
-            .bind(&addr).unwrap()
-            .listen(TCP_BACKLOG).unwrap()).unwrap();
+        create_net_listener(&addr)).unwrap();
 
     let mut poll = mio::Poll::new().unwrap();
     let mut server = Server::new(listener, config);

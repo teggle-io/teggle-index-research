@@ -24,8 +24,9 @@ ring = { git = "https://github.com/mesalock-linux/ring-sgx.git", tag = "v0.16.5"
 blake2 = { git = "https://github.com/mesalock-linux/rustcrypto-hashes-sgx.git", package = "blake2" }
 sha2 = { git = "https://github.com/mesalock-linux/rustcrypto-hashes-sgx.git", package = "sha2" }
 digest = { git = "https://github.com/mesalock-linux/rustcrypto-traits-sgx.git", package = "digest" }
-rustls = { git = "https://github.com/mesalock-linux/rustls", branch = "mesalock_sgx" }
-webpki = { git = "https://github.com/mesalock-linux/webpki", branch = "mesalock_sgx" }
+rustls = { git = "https://github.com/teggle-io/rustls-sgx.git", branch = "master" }
+#rustls = { path = "../../../rustls-sgx/rustls" }
+webpki = { git = "https://github.com/teggle-io/webpki-sgx.git", branch = "main" }
 #protected_fs_rs = { git = "https://github.com/mesalock-linux/protected_fs_rs" }
 lazy_static = { version = "1.4.0", default-features = false, features = ["spin_no_std"] }
 serde = { git = "https://github.com/mesalock-linux/serde-sgx.git", package = "serde" }

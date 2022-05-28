@@ -3,7 +3,6 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::future::Future;
-use core::ops::Add;
 
 use futures::future::BoxFuture;
 use futures::FutureExt;
@@ -156,6 +155,18 @@ impl Connection {
         }
 
         if request_body.len() > 0 {
+            let response =
+                b"HTTP/1.1 200 OK\r\nContent-Length: 68\r\n\r\nHello world from rustls tlsserverHello world from rustls tlsserver\r\n";
+
+            self.write(&response[..]);
+
+            self.write_tls_and_handle_error();
+            if self.is_closing() {
+                self.close();
+            }
+            // END TESTING
+
+            /*
             trace!("req body: {:?}", String::from_utf8(request_body.clone()));
 
             // Consume request body.
@@ -193,6 +204,8 @@ impl Connection {
                     self.request = Some(req);
                 }
             }
+
+             */
         }
     }
 
