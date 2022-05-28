@@ -6,7 +6,6 @@ use core::str::FromStr;
 use bytes::BytesMut;
 use http::{Extensions, HeaderMap, HeaderValue, Method, Uri, Version};
 use http::header::AsHeaderName;
-use http::request::Builder;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::sync::SgxMutex;

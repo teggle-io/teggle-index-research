@@ -294,7 +294,7 @@ pub(crate) struct RouteHandler {
     method: Method,
     tokens: Vec<RouteHandlerToken>,
     handler: Handler,
-    middleware: Vec<Middleware>,
+    middleware: Arc<Vec<Middleware>>,
 }
 
 impl RouteHandler {
@@ -305,53 +305,48 @@ impl RouteHandler {
         let (unique, tokens) =
             extract_route_handler_tokens(method.clone(), path);
 
-        // Finalize middleware
-        let cb_handler = handler.clone();
-        let mut middleware: Vec<Middleware> = middleware.clone();
-        middleware.push(Arc::new(move |ctx, res, _next| {
-            let cb_handler = cb_handler.clone();
-            Box::pin(async move {
-                // Last middleware to call handler, do not call next.
-                cb_handler(ctx, res).await
-            })
-        }));
-
         Self {
             unique,
             method,
             tokens,
             handler,
-            middleware,
+            middleware: Arc::new(middleware),
         }
     }
 
     async fn route(&self, ctx: &mut Context, res: &mut Response) -> Result<(), Error> {
-        let middleware: Vec<Middleware> = self.middleware.clone();
-        _route_step(ctx, res, Arc::new(middleware), 0).await
+        _invoke_middleware(ctx, res, self.middleware.clone(), 0,
+                           self.handler.clone()).await
     }
 }
 
-fn _route_step<'a>(
+fn _invoke_middleware<'a>(
     ctx: &'a mut Context,
     res: &'a mut Response,
     middleware: Arc<Vec<Middleware>>,
     level: usize,
+    handler: Handler,
 ) -> BoxFuture<'a, Result<(), Error>> {
     Box::pin(async move {
         let cur = middleware.get(level).unwrap();
         let last = level + 1 >= middleware.len();
         let middleware = middleware.clone();
+        let handler = handler.clone();
 
         cur(
             ctx,
             res,
             Arc::new(move |ctx, res| {
                 let middleware = middleware.clone();
+                let handler = handler.clone();
+
                 Box::pin(async move {
                     if last {
-                        return Ok(());
+                        handler(ctx, res).await
+                    } else {
+                        _invoke_middleware(ctx, res, middleware, level + 1,
+                                           handler.clone()).await
                     }
-                    _route_step(ctx, res, middleware, level + 1).await
                 })
             }),
         ).await

@@ -24,8 +24,6 @@ const LISTENER_TOKEN: Token = Token(0);
 
 // 50 Kb
 const MAX_BYTES_RECEIVED: usize = 50 * 1024;
-// System default for now.
-const KEEPALIVE_DURATION: Duration = Duration::from_secs(7200);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 // Currently the exec deadlines cannot be surfaced to the future
 // their main purpose is to release some system resources.
@@ -201,7 +199,6 @@ fn create_net_listener(addr: &str) -> std::net::TcpListener {
 pub(crate) fn start_api_server(addr: &str) {
     let config = Arc::new(Config::new(
         MAX_BYTES_RECEIVED,
-        KEEPALIVE_DURATION,
         REQUEST_TIMEOUT,
         EXEC_TIMEOUT));
 
