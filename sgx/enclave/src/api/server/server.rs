@@ -29,9 +29,13 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 // their main purpose is to release some system resources.
 const EXEC_TIMEOUT: Duration = Duration::from_secs(7200);
 
+// Per connection.
+const DEFERRAL_BACKLOG: usize = 100;
+const FUTURE_BACKLOG: usize = 100;
+
 const TCP_BACKLOG: i32 = 250;
 
-const MIO_EVENTS_CAPACITY: usize = TCP_BACKLOG as usize * 2;
+const MIO_EVENTS_CAPACITY: usize = 2048;
 const MIO_TIMEOUT_POLL: Duration = Duration::from_millis(1000);
 
 const MIO_SERVER_OFFSET: usize = 10;
@@ -200,7 +204,9 @@ pub(crate) fn start_api_server(addr: &str) {
     let config = Arc::new(Config::new(
         MAX_BYTES_RECEIVED,
         REQUEST_TIMEOUT,
-        EXEC_TIMEOUT));
+        EXEC_TIMEOUT,
+    Some(DEFERRAL_BACKLOG),
+    Some(FUTURE_BACKLOG)));
 
     let listener = TcpListener::from_std(
         create_net_listener(&addr)).unwrap();

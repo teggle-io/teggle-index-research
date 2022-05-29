@@ -92,12 +92,19 @@ fn build_routes() -> Router {
     }));
 
     r.get("/ws", |ctx: &mut Context, _res| Box::pin(async move {
-        ctx.subscribe(|ctx| Box::pin(async move {
+        ctx.subscribe(|ctx, msg| Box::pin(async move {
             info!("WS MSG");
 
-            ctx.send(b"Hello, World".to_vec())?;
-
-            Ok(())
+            match ctx.lock() {
+                Ok(ctx) => {
+                    if let Err(err) = ctx.send(b"Hello, World".to_vec()) {
+                        warn!("failed to send msg: {:?}", err);
+                    }
+                }
+                Err(err) => {
+                    warn!("failed to acquire ctx lock while processing message: {:?}", err);
+                }
+            }
         }))?;
 
         // TODO: Ensure this is sent AFTER the response has been sent.

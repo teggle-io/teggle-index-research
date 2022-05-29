@@ -26,6 +26,7 @@ use crate::api::{
     results::{Error, ErrorKind, ResponseBody, too_many_bytes_err},
     server::config::Config,
 };
+use crate::api::handler::context::Context;
 use crate::api::handler::request::process_ws_raw_request;
 use crate::api::server::websocket::WebSocket;
 
@@ -53,6 +54,13 @@ impl Connection {
         exec: Arc<SgxMutex<ExecReactor>>,
         httpc: Arc<SgxMutex<HttpcReactor>>,
     ) -> Self {
+        let deferral = Arc::new(SgxMutex::new(
+            Deferral::new(
+                Token(conn_id + 1),
+                config.max_defers_queue(),
+                config.max_futures_queue(),
+            )));
+
         Self {
             token: Token(conn_id),
             socket,
@@ -60,7 +68,7 @@ impl Connection {
             config,
             exec,
             httpc,
-            deferral: Arc::new(SgxMutex::new(Deferral::new(Token(conn_id + 1)))),
+            deferral,
             request: None,
             closing: false,
             closed: false,
@@ -201,24 +209,30 @@ impl Connection {
 
     #[inline]
     fn handle_ws_request(&mut self, _poll: &mut mio::Poll) {
-        let err: Option<Error> = match self.ws.as_ref().unwrap().lock() {
-            Ok(mut ws) => {
-                if let Err(e) = ws.handle(&mut self.tls_conn) {
-                    Some(e)
-                } else {
-                    None
+        if let Ok(io_state) = self.tls_conn.process_new_packets() {
+            if io_state.plaintext_bytes_to_read() > 0 {
+                let err: Option<Error> = match self.ws.as_ref().unwrap().lock() {
+                    Ok(mut ws) => {
+                        let mut tls_stream =
+                            mut_tls_stream(&mut self.tls_conn, &mut self.socket);
+                        if let Err(e) = ws.handle(&mut tls_stream) {
+                            Some(e)
+                        } else {
+                            None
+                        }
+                    }
+                    Err(e) => {
+                        Some(Error::new_with_kind(
+                            ErrorKind::WSFault,
+                            format!("failed to acquire lock on 'ws' \
+                            during handle_ws_request: {:?}", e).to_string(),
+                        ))
+                    }
+                };
+                if let Some(err) = err {
+                    self.handle_error(&err);
                 }
             }
-            Err(e) => {
-                Some(Error::new_with_kind(
-                    ErrorKind::WSFault,
-                    format!("failed to acquire lock on 'ws' \
-                    during handle_ws_request: {:?}", e).to_string()
-                ))
-            }
-        };
-        if let Some(err) = err {
-            self.handle_error(&err);
         }
     }
 
@@ -290,6 +304,22 @@ impl Connection {
         }
     }
 
+    pub fn check_timeout(&mut self, poll: &mut mio::Poll, now: &Instant) {
+        if let Some(req) = self.request.as_ref() {
+            if req.check_timeout(now) {
+                self.handle_error(
+                    &Error::new_with_kind(
+                        ErrorKind::TimedOut,
+                        "request timed out".to_string(),
+                    ),
+                );
+                self.write_tls_and_handle_error();
+                self.close();
+                self.deregister(poll);
+            }
+        }
+    }
+
     // Web Socket
     #[inline]
     pub(crate) fn is_websocket(&self) -> bool {
@@ -297,21 +327,27 @@ impl Connection {
     }
 
     #[inline]
-    pub(crate) fn websocket(&mut self, websocket: Arc<SgxMutex<WebSocket>>) -> Result<(), Error> {
+    pub(crate) fn websocket(
+        &mut self,
+        websocket: Arc<SgxMutex<WebSocket>>,
+        context: Context
+    ) -> Result<(), Error> {
         self.ws = Some(websocket);
 
         return match self.ws.as_ref().unwrap().lock() {
             Ok(mut websocket) => {
-                websocket.activate(&mut self.tls_conn)
+                let mut tls_stream =
+                    mut_tls_stream(&mut self.tls_conn, &mut self.socket);
+                websocket.activate(&mut tls_stream, context)
             }
             Err(err) => {
                 Err(Error::new_with_kind(
                     ErrorKind::WSFault,
                     format!("failed to acquire lock on 'ws' \
-                    during preparation of websocket: {:?}", err).to_string()
+                    during preparation of websocket: {:?}", err).to_string(),
                 ))
             }
-        }
+        };
     }
 
     // Tls Session Related
@@ -531,10 +567,9 @@ impl Connection {
     }
 
     #[inline]
-    pub(crate) fn mut_tls_con(&mut self) -> &mut rustls::ServerConnection {
-        &mut self.tls_conn
+    pub(crate) fn mut_tls_stream(&mut self) -> rustls::Stream<rustls::ServerConnection, TcpStream> {
+        mut_tls_stream(&mut self.tls_conn, &mut self.socket)
     }
-
 
     #[inline]
     pub(crate) fn is_closing(&self) -> bool {
@@ -550,54 +585,79 @@ impl Connection {
     pub(crate) fn is_closed(&self) -> bool {
         self.closed
     }
+}
 
-    pub fn check_timeout(&mut self, poll: &mut mio::Poll, now: &Instant) {
-        if let Some(req) = self.request.as_ref() {
-            if req.check_timeout(now) {
-                self.handle_error(
-                    &Error::new_with_kind(
-                        ErrorKind::TimedOut,
-                        "request timed out".to_string(),
-                    ),
-                );
-                self.write_tls_and_handle_error();
-                self.close();
-                self.deregister(poll);
-            }
-        }
-    }
+fn mut_tls_stream<'a>(
+    conn: &'a mut rustls::ServerConnection,
+    sock: &'a mut TcpStream
+) -> rustls::Stream<'a, rustls::ServerConnection, TcpStream> {
+    rustls::Stream { conn, sock }
 }
 
 pub(crate) struct Deferral {
     waker: ReactorWaker,
-    defers: Vec<Arc<dyn Send + Sync + for<'a> Fn(&'a mut Connection) -> Result<(), Error>>>,
+    defers: Vec<Box<dyn Send + Sync + for<'a> FnOnce(&'a mut Connection) -> Result<(), Error>>>,
     futures: Vec<BoxFuture<'static, ()>>,
+    // Options
+    max_defers_queue: Option<usize>,
+    max_futures_queue: Option<usize>,
 }
 
 impl Deferral {
-    fn new(waker_token: Token) -> Self {
+    fn new(
+        waker_token: Token,
+        max_defers_queue: Option<usize>,
+        max_futures_queue: Option<usize>,
+    ) -> Self {
         Self {
             waker: ReactorWaker::new(waker_token),
             defers: Vec::new(),
             futures: Vec::new(),
+            max_defers_queue,
+            max_futures_queue,
         }
     }
 
     #[inline]
-    pub(crate) fn defer(&mut self, defer: Arc<dyn Send + Sync + for<'a> Fn(&'a mut Connection) -> Result<(), Error>>) {
+    pub(crate) fn defer(
+        &mut self,
+        defer: Box<dyn Send + Sync + for<'a> FnOnce(&'a mut Connection) -> Result<(), Error>>,
+    ) -> Result<(), Error> {
+        if let Some(max_defers_queue) = self.max_defers_queue {
+            if self.defers.len() >= max_defers_queue {
+                return Err(Error::new_with_kind(
+                    ErrorKind::ServerFault,
+                    format!("unable to queue deferral, limit exceeded: {}", max_defers_queue).to_string(),
+                ));
+            }
+        }
+
         self.defers.push(defer);
         if let Err(err) = self.waker.trigger() {
             warn!("Deferral->defer failed to trigger waker: {:?}", err)
         }
+
+        Ok(())
     }
 
     #[inline]
     #[allow(dead_code)]
-    pub(crate) fn spawn(&mut self, future: impl Future<Output=()> + 'static + Send) {
+    pub(crate) fn spawn(&mut self, future: impl Future<Output=()> + 'static + Send) -> Result<(), Error> {
+        if let Some(max_futures_queue) = self.max_futures_queue {
+            if self.defers.len() >= max_futures_queue {
+                return Err(Error::new_with_kind(
+                    ErrorKind::ServerFault,
+                    format!("unable to queue future, limit exceeded: {}", max_futures_queue).to_string(),
+                ));
+            }
+        }
+
         self.futures.push(future.boxed());
         if let Err(err) = self.waker.trigger() {
             warn!("Deferral->spawn failed to trigger waker: {:?}", err)
         }
+
+        Ok(())
     }
 
     #[inline]
@@ -612,7 +672,7 @@ impl Deferral {
 
     #[inline]
     fn take_pending(&mut self) -> (
-        Vec<Arc<dyn Send + Sync + for<'a> Fn(&'a mut Connection) -> Result<(), Error>>>,
+        Vec<Box<dyn Send + Sync + for<'a> FnOnce(&'a mut Connection) -> Result<(), Error>>>,
         Vec<BoxFuture<'static, ()>>
     ) {
         // Clear the waker readiness state prior to removing pending items.

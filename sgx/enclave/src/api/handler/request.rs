@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -30,7 +31,7 @@ static HEADER_UPGRADE_WEBSOCKET: &str = "websocket";
 pub(crate) async fn process_raw_request(
     deferral: Arc<SgxMutex<Deferral>>,
     httpc: Arc<SgxMutex<HttpcReactor>>,
-    raw_req: RawRequest
+    raw_req: RawRequest,
 ) {
     let result = match raw_req.extract() {
         Some(req) => {
@@ -52,7 +53,7 @@ pub(crate) async fn process_raw_request(
 
     match deferral.lock() {
         Ok(mut deferral) => {
-            deferral.defer(Arc::new(move |conn| {
+            if let Err(err) = deferral.defer(Box::new(move |conn| {
                 match &result {
                     Ok(res) => {
                         conn.send_response(res);
@@ -63,7 +64,10 @@ pub(crate) async fn process_raw_request(
                 }
 
                 Ok(())
-            }));
+            })) {
+                warn!("failed to submit 'defer' \
+                    during process_raw_request: {:?}", err);
+            }
         }
         Err(err) => {
             warn!("failed to acquire lock on 'deferral' \
@@ -75,12 +79,12 @@ pub(crate) async fn process_raw_request(
 pub(crate) async fn process_ws_raw_request(
     deferral: Arc<SgxMutex<Deferral>>,
     httpc: Arc<SgxMutex<HttpcReactor>>,
-    raw_req: RawRequest
+    raw_req: RawRequest,
 ) {
     let ws = Arc::new(SgxMutex::new(WebSocket::new(
         deferral.clone()
     )));
-    let result = match raw_req.extract() {
+    let (result, ctx) = match raw_req.extract() {
         Some(req) => {
             match create_response(req.request().into()) {
                 Ok(res) => {
@@ -88,34 +92,45 @@ pub(crate) async fn process_ws_raw_request(
                     let mut res = Response::from_request_and_parts(&req, parts);
                     let mut ctx: Context = Context::new(req, httpc, Some(ws.clone()));
 
-                    match route_request(&mut ctx, &mut res).await {
-                        Ok(_) => res.encode(),
-                        Err(err) => Err(err)
-                    }
+                    (
+                        match route_request(&mut ctx, &mut res).await {
+                            Ok(_) => res.encode(),
+                            Err(err) => Err(err)
+                        },
+                        Some(ctx)
+                    )
                 }
                 Err(err) => {
-                    Err(Error::new_with_kind(
+                    (Err(Error::new_with_kind(
                         ErrorKind::WSFault,
                         format!("failed to extract ws request - {:?}", err),
-                    ))
+                    )), None)
                 }
             }
         }
         None => {
-            Err(Error::new_with_kind(
+            (Err(Error::new_with_kind(
                 ErrorKind::ServerFault,
                 "failed to extract ws request from raw request".to_string(),
-            ))
+            )), None)
         }
     };
 
     match deferral.lock() {
         Ok(mut deferral) => {
-            deferral.defer(Arc::new(move |conn| {
+            if let Err(err) = deferral.defer(Box::new(move |conn| {
                 match &result {
                     Ok(res) => {
-                        conn.send_response(res);
-                        conn.websocket(ws.clone())?;
+                        if let Some(ctx) = ctx {
+                            conn.send_response(res);
+                            conn.websocket(ws.clone(), ctx)?;
+                        } else {
+                            conn.handle_error(&Error::new_with_kind(
+                                ErrorKind::ServerFault,
+                                "illegal state during process_ws_raw_request \
+                                (no context)".to_string(),
+                            ));
+                        }
                     }
                     Err(err) => {
                         conn.handle_error(&err);
@@ -123,7 +138,10 @@ pub(crate) async fn process_ws_raw_request(
                 }
 
                 Ok(())
-            }));
+            })) {
+                warn!("failed to submit 'defer' \
+                    during process_ws_raw_request: {:?}", err);
+            }
         }
         Err(err) => {
             warn!("failed to acquire lock on 'deferral' \
@@ -299,7 +317,7 @@ impl Request {
     pub(crate) fn new(
         req: http::Request<()>,
         body: Vec<u8>,
-        websocket: bool
+        websocket: bool,
     ) -> Self {
         Self { req, body, vars: None, websocket }
     }
