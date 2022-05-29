@@ -68,13 +68,17 @@ fn build_routes() -> Router {
 
                     Ok(())
                 } else {
-                    res.ok("No results")
+                    res.error(http::StatusCode::NO_CONTENT,"No results")
                 }
             }));
     });
 
     r.get("/ping", |_ctx, res| Box::pin(async move {
         res.ok("PONG")
+    }));
+
+    r.get("/ping/empty", |_ctx, _res| Box::pin(async move {
+        Ok(())
     }));
 
     r.get("/hello/:name", |ctx, res| Box::pin(async move {

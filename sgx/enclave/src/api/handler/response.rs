@@ -42,10 +42,12 @@ impl Response {
 
     #[inline]
     pub(crate) fn from_request_and_parts(req: &Request, parts: Parts) -> Self {
-        let mut res = Self::new();
+        let mut res = Self {
+            parts,
+            body_bytes: None,
+            close: !req.should_keep_alive(),
+        };
         res.version(req.version());
-        res.parts = parts;
-        res.close = !req.should_keep_alive();
         res
     }
 
@@ -106,9 +108,7 @@ impl Response {
 
                 Ok(())
             }
-            Err(e) => {
-                Err(e)
-            }
+            Err(e) => Err(e)
         }
     }
 
@@ -145,7 +145,7 @@ impl Response {
 
                 Ok(ResponseBody::new_with_close(encoded.to_vec(), self.close))
             },
-            Err(e) => Err(Error::new(e.to_string()))
+            Err(e) => Err(e)
         }
     }
 }

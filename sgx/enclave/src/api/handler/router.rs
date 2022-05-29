@@ -144,7 +144,6 @@ impl Router {
                 let path_parts: Vec<&str> = path.split("/")
                     .filter(|p| { !p.is_empty() })
                     .collect();
-                let path_parts_len = path_parts.len();
 
                 let mut handler: Option<&RouteHandler> = None;
                 let mut captures: HashMap<String, String> = HashMap::new();
@@ -153,9 +152,7 @@ impl Router {
                     if cur.method.ne(method) {
                         continue;
                     }
-
-                    let cur_count = cur.tokens.len();
-                    if cur_count != path_parts_len {
+                    if cur.tokens.len() != path_parts.len() {
                         continue;
                     }
 

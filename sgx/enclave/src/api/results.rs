@@ -89,6 +89,7 @@ pub struct Error {
 }
 
 impl Error {
+    #[allow(dead_code)]
     pub fn new(message: String) -> Self {
         Self::new_with_kind(ErrorKind::ServerFault, message)
     }
