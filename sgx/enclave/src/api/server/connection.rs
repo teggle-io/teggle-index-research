@@ -26,7 +26,8 @@ use crate::api::{
     results::{Error, ErrorKind, ResponseBody, too_many_bytes_err},
     server::config::Config,
 };
-use crate::api::handler::context::SubscriptionHandler;
+use crate::api::handler::request::process_ws_raw_request;
+use crate::api::server::websocket::WebSocket;
 
 pub(crate) struct Connection {
     token: mio::Token,
@@ -40,6 +41,7 @@ pub(crate) struct Connection {
     closing: bool,
     closed: bool,
     close_notify_sent: bool,
+    ws: Option<Arc<SgxMutex<WebSocket>>>,
 }
 
 impl Connection {
@@ -63,6 +65,7 @@ impl Connection {
             closing: false,
             closed: false,
             close_notify_sent: false,
+            ws: None
         }
     }
 
@@ -212,7 +215,11 @@ impl Connection {
         let httpc = self.httpc.clone();
 
         if let Err(err) = self.spawn(poll, async move {
-            process_raw_request(deferral, httpc, req).await
+            if req.is_upgrade_websocket() {
+                process_ws_raw_request(deferral, httpc, req).await
+            } else {
+                process_raw_request(deferral, httpc, req).await
+            }
         }) {
             self.handle_error(&err);
         }
@@ -232,12 +239,6 @@ impl Connection {
             }
         }
 
-        Ok(())
-    }
-
-    // Web Socket
-    #[inline]
-    pub(crate) fn subscribe(&self, _handler: SubscriptionHandler) -> Result<(), Error>  {
         Ok(())
     }
 
@@ -275,8 +276,16 @@ impl Connection {
 
     #[inline]
     pub(crate) fn handle_error(&mut self, err: &Error) {
+        // Abort
+        self.closing = true;
+
+        if self.is_websocket() {
+            // Not a standard request.
+            warn!("error occurred during websocket request: {}", err);
+            return;
+        }
+
         warn!("failed to handle request: {}", err);
-        self.request = None;
 
         if self.is_closed() {
             // Abort early, stale connection.
@@ -485,6 +494,16 @@ impl Connection {
         self.closed
     }
 
+    #[inline]
+    pub(crate) fn is_websocket(&self) -> bool {
+        self.ws.is_some()
+    }
+
+    #[inline]
+    pub(crate) fn websocket(&mut self, websocket: Option<Arc<SgxMutex<WebSocket>>>) {
+        self.ws = websocket
+    }
+
     pub fn check_timeout(&mut self, poll: &mut mio::Poll, now: &Instant) {
         if let Some(req) = self.request.as_ref() {
             if req.check_timeout(now) {
@@ -526,6 +545,7 @@ impl Deferral {
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub(crate) fn spawn(&mut self, future: impl Future<Output=()> + 'static + Send) {
         self.futures.push(future.boxed());
         if let Err(err) = self.waker.trigger() {

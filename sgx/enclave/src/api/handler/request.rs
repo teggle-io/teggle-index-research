@@ -20,6 +20,7 @@ use crate::api::reactor::httpc::HttpcReactor;
 use crate::api::results::{Error, ErrorKind, too_many_bytes_err};
 use crate::api::server::config::Config;
 use crate::api::server::connection::Deferral;
+use crate::api::server::websocket::WebSocket;
 
 static HEADER_CONNECTION_KEEPALIVE: &str = "keep-alive";
 static HEADER_CONNECTION_UPGRADE: &str = "upgrade";
@@ -33,33 +34,12 @@ pub(crate) async fn process_raw_request(
 ) {
     let result = match raw_req.extract() {
         Some(req) => {
-            if req.is_websocket() {
-                match create_response(req.request().into()) {
-                    Ok(res) => {
-                        let (parts, _) = res.into_parts();
-                        let mut res = Response::from_request_and_parts(&req, parts);
-                        let mut ctx: Context = Context::new(req, deferral.clone(), httpc);
+            let mut res = Response::from_request(&req);
+            let mut ctx: Context = Context::new(req, httpc, None);
 
-                        match route_request(&mut ctx, &mut res).await {
-                            Ok(_) => res.encode(),
-                            Err(err) => Err(err)
-                        }
-                    }
-                    Err(err) => {
-                        Err(Error::new_with_kind(
-                            ErrorKind::WSFault,
-                            format!("failed to extract ws request - {:?}", err),
-                        ))
-                    }
-                }
-            } else {
-                let mut res = Response::from_request(&req);
-                let mut ctx: Context = Context::new(req, deferral.clone(), httpc);
-
-                match route_request(&mut ctx, &mut res).await {
-                    Ok(_) => res.encode(),
-                    Err(err) => Err(err)
-                }
+            match route_request(&mut ctx, &mut res).await {
+                Ok(_) => res.encode(),
+                Err(err) => Err(err)
             }
         }
         None => {
@@ -88,6 +68,64 @@ pub(crate) async fn process_raw_request(
         Err(err) => {
             warn!("failed to acquire lock on 'deferral' \
                     during process_raw_request: {:?}", err);
+        }
+    }
+}
+
+pub(crate) async fn process_ws_raw_request(
+    deferral: Arc<SgxMutex<Deferral>>,
+    httpc: Arc<SgxMutex<HttpcReactor>>,
+    raw_req: RawRequest
+) {
+    let ws = Arc::new(SgxMutex::new(WebSocket::new()));
+    let result = match raw_req.extract() {
+        Some(req) => {
+            match create_response(req.request().into()) {
+                Ok(res) => {
+                    let (parts, _) = res.into_parts();
+                    let mut res = Response::from_request_and_parts(&req, parts);
+                    let mut ctx: Context = Context::new(req, httpc, Some(ws.clone()));
+
+                    match route_request(&mut ctx, &mut res).await {
+                        Ok(_) => res.encode(),
+                        Err(err) => Err(err)
+                    }
+                }
+                Err(err) => {
+                    Err(Error::new_with_kind(
+                        ErrorKind::WSFault,
+                        format!("failed to extract ws request - {:?}", err),
+                    ))
+                }
+            }
+        }
+        None => {
+            Err(Error::new_with_kind(
+                ErrorKind::ServerFault,
+                "failed to extract ws request from raw request".to_string(),
+            ))
+        }
+    };
+
+    match deferral.lock() {
+        Ok(mut deferral) => {
+            deferral.defer(Arc::new(move |conn| {
+                match &result {
+                    Ok(res) => {
+                        conn.send_response(res);
+                        conn.websocket(Some(ws.clone()));
+                    }
+                    Err(err) => {
+                        conn.handle_error(&err);
+                    }
+                }
+
+                Ok(())
+            }));
+        }
+        Err(err) => {
+            warn!("failed to acquire lock on 'deferral' \
+                    during process_ws_raw_request: {:?}", err);
         }
     }
 }
@@ -132,6 +170,11 @@ impl RawRequest {
     #[inline]
     pub(crate) fn len(&self) -> usize {
         self.bytes
+    }
+
+    #[inline]
+    pub(crate) fn is_upgrade_websocket(&self) -> bool {
+        self.upgrade_websocket
     }
 
     #[inline]

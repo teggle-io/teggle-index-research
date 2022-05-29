@@ -4,7 +4,6 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::any::Any;
 
-use futures::future::BoxFuture;
 use mio_httpc::{CallBuilder, Method};
 use std::collections::HashMap;
 use std::sync::SgxMutex;
@@ -12,19 +11,16 @@ use std::sync::SgxMutex;
 use crate::api::handler::request::Request;
 use crate::api::reactor::httpc::{HttpcCallFuture, HttpcReactor};
 use crate::api::results::{Error, ErrorKind};
-use crate::api::server::connection::Deferral;
+use crate::api::server::websocket::{SubscriptionHandlerFn, WebSocket};
 
 const FETCH_DEFAULT_TIMEOUT_MS: u64 = 2500;
-
-pub(crate) type SubscriptionHandler = Arc<dyn Send + Sync + for<'a> Fn(&'a mut Context) -> BoxFuture<'a, Result<(), Error>>>;
-pub(crate) type SubscriptionHandlerFn = for<'a> fn(&'a mut Context) -> BoxFuture<'a, Result<(), Error>>;
 
 type ContextValue = dyn Any + Sync + Send + 'static;
 
 pub struct Context {
     request: Request,
-    deferral: Arc<SgxMutex<Deferral>>,
     httpc: Arc<SgxMutex<HttpcReactor>>,
+    ws: Option<Arc<SgxMutex<WebSocket>>>,
     data: HashMap<&'static str, Box<ContextValue>>,
 }
 
@@ -33,13 +29,13 @@ impl Context {
     #[inline]
     pub(crate) fn new(
         request: Request,
-        deferral: Arc<SgxMutex<Deferral>>,
         httpc: Arc<SgxMutex<HttpcReactor>>,
+        ws: Option<Arc<SgxMutex<WebSocket>>>,
     ) -> Self {
         Self {
             request,
-            deferral,
             httpc,
+            ws,
             data: HashMap::new(),
         }
     }
@@ -54,8 +50,12 @@ impl Context {
 
     // Web Sockets
 
+    pub fn is_websocket(&self) -> bool {
+        self.ws.is_some() && self.request.is_websocket()
+    }
+
     pub fn subscribe(&self, handler: SubscriptionHandlerFn) -> Result<(), Error> {
-        if !self.request.is_websocket() {
+        if !self.is_websocket() {
             return Err(Error::new_with_kind(
                 ErrorKind::WSFault,
                 format!("attempt to call Context->subscribe when request is not a web socket"),
@@ -64,25 +64,21 @@ impl Context {
 
         let handler = Arc::new(handler);
 
-        return match self.deferral.lock() {
-            Ok(mut deferral) => {
-                deferral.defer(Arc::new(move |conn| {
-                    conn.subscribe(handler.clone())
-                }));
-
-                Ok(())
+        return match self.ws.as_ref().unwrap().lock() {
+            Ok(mut ws) => {
+                ws.subscribe(handler.clone())
             }
             Err(err) => {
                 Err(Error::new_with_kind(
                     ErrorKind::WSFault,
-                    format!("failed to acquire lock on 'deferral' during Context->subscribe: {:?}", err),
+                    format!("failed to acquire lock on 'ws' during Context->subscribe: {:?}", err),
                 ))
             }
         };
     }
 
     pub fn send(&self, data: Vec<u8>) -> Result<(), Error> {
-        if !self.request.is_websocket() {
+        if !self.is_websocket() {
             return Err(Error::new_with_kind(
                 ErrorKind::WSFault,
                 format!("attempt to call Context->send when request is not a web socket"),

@@ -48,6 +48,7 @@ pub(crate) struct Router {
 }
 
 impl Router {
+    #[inline]
     pub(crate) fn new() -> Self {
         let top = Self {
             top: None,
@@ -298,6 +299,7 @@ pub(crate) struct RouteHandler {
 }
 
 impl RouteHandler {
+    #[inline]
     fn new<P>(method: Method, path: P, handler: Handler, middleware: Vec<Middleware>) -> Self
         where
             String: From<P>
@@ -314,12 +316,18 @@ impl RouteHandler {
         }
     }
 
+    #[inline]
     async fn route(&self, ctx: &mut Context, res: &mut Response) -> Result<(), Error> {
-        _invoke_middleware(ctx, res, self.middleware.clone(), 0,
-                           self.handler.clone()).await
+        if self.middleware.len() > 0 {
+            _invoke_middleware(ctx, res, self.middleware.clone(), 0,
+                               self.handler.clone()).await
+        } else {
+            self.handler.clone()(ctx, res).await
+        }
     }
 }
 
+#[inline]
 fn _invoke_middleware<'a>(
     ctx: &'a mut Context,
     res: &'a mut Response,
@@ -387,6 +395,7 @@ fn extract_route_handler_tokens<P>(method: Method, path: P) -> (String, Vec<Rout
     (key_parts.join("/"), tokens)
 }
 
+#[inline]
 pub fn path_into_trimmed_string<P>(path: P) -> String
     where
         String: From<P>
