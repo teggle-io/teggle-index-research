@@ -30,7 +30,6 @@ sha2 = { git = "https://github.com/mesalock-linux/rustcrypto-hashes-sgx.git", pa
 digest = { git = "https://github.com/mesalock-linux/rustcrypto-traits-sgx.git", package = "digest" }
 rustls = { git = "https://github.com/teggle-io/rustls-sgx.git", branch = "main" }
 rustls-pemfile = { git = "https://github.com/teggle-io/rustls-pemfile-sgx.git", branch = "main" }
-#rustls = { path = "../../../rustls-sgx/rustls" }
 webpki = { git = "https://github.com/teggle-io/webpki-sgx.git", branch = "main" }
 #protected_fs_rs = { git = "https://github.com/mesalock-linux/protected_fs_rs" }
 lazy_static = { version = "1.4.0", default-features = false, features = ["spin_no_std"] }
