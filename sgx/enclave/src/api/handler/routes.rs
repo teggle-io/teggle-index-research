@@ -101,7 +101,7 @@ fn build_routes() -> Router {
         }))?;
 
         // TODO: Ensure this is sent AFTER the response has been sent.
-        ctx.send(b"Welcome".to_vec());
+        ctx.send(b"Welcome".to_vec())?;
 
         Ok(())
     }));

@@ -1,5 +1,5 @@
 use alloc::boxed::Box;
-use alloc::string::{ToString};
+use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::future::Future;
@@ -65,7 +65,7 @@ impl Connection {
             closing: false,
             closed: false,
             close_notify_sent: false,
-            ws: None
+            ws: None,
         }
     }
 
@@ -77,7 +77,11 @@ impl Connection {
             if ev.readiness().is_readable() {
                 trace!("ready[{:?}]: READ", self.token);
                 self.read_tls();
-                self.handle_request(poll);
+                if self.is_websocket() {
+                    self.handle_ws_request(poll);
+                } else {
+                    self.handle_request(poll);
+                }
             }
         }
 
@@ -196,6 +200,29 @@ impl Connection {
     }
 
     #[inline]
+    fn handle_ws_request(&mut self, _poll: &mut mio::Poll) {
+        let err: Option<Error> = match self.ws.as_ref().unwrap().lock() {
+            Ok(mut ws) => {
+                if let Err(e) = ws.handle(&mut self.tls_conn) {
+                    Some(e)
+                } else {
+                    None
+                }
+            }
+            Err(e) => {
+                Some(Error::new_with_kind(
+                    ErrorKind::WSFault,
+                    format!("failed to acquire lock on 'ws' \
+                    during handle_ws_request: {:?}", e).to_string()
+                ))
+            }
+        };
+        if let Some(err) = err {
+            self.handle_error(&err);
+        }
+    }
+
+    #[inline]
     #[allow(dead_code)]
     fn send_mock_response(&mut self) {
         let response =
@@ -242,7 +269,6 @@ impl Connection {
         Ok(())
     }
 
-    // Tls Session Related
     pub(crate) fn send_response(&mut self, res: &ResponseBody) {
         if self.is_closed() {
             // Abort, stale connection.
@@ -264,6 +290,31 @@ impl Connection {
         }
     }
 
+    // Web Socket
+    #[inline]
+    pub(crate) fn is_websocket(&self) -> bool {
+        self.ws.is_some()
+    }
+
+    #[inline]
+    pub(crate) fn websocket(&mut self, websocket: Arc<SgxMutex<WebSocket>>) -> Result<(), Error> {
+        self.ws = Some(websocket);
+
+        return match self.ws.as_ref().unwrap().lock() {
+            Ok(mut websocket) => {
+                websocket.activate(&mut self.tls_conn)
+            }
+            Err(err) => {
+                Err(Error::new_with_kind(
+                    ErrorKind::WSFault,
+                    format!("failed to acquire lock on 'ws' \
+                    during preparation of websocket: {:?}", err).to_string()
+                ))
+            }
+        }
+    }
+
+    // Tls Session Related
     #[inline]
     fn handle_io_error(&mut self, err: io::Error) {
         if let Some(err) = err.into_inner() {
@@ -403,7 +454,7 @@ impl Connection {
                     Ok(_) => {
                         plaintext.len() as isize
                     }
-                }
+                };
             }
         }
 
@@ -480,6 +531,12 @@ impl Connection {
     }
 
     #[inline]
+    pub(crate) fn mut_tls_con(&mut self) -> &mut rustls::ServerConnection {
+        &mut self.tls_conn
+    }
+
+
+    #[inline]
     pub(crate) fn is_closing(&self) -> bool {
         self.closing
     }
@@ -492,16 +549,6 @@ impl Connection {
     #[inline]
     pub(crate) fn is_closed(&self) -> bool {
         self.closed
-    }
-
-    #[inline]
-    pub(crate) fn is_websocket(&self) -> bool {
-        self.ws.is_some()
-    }
-
-    #[inline]
-    pub(crate) fn websocket(&mut self, websocket: Option<Arc<SgxMutex<WebSocket>>>) {
-        self.ws = websocket
     }
 
     pub fn check_timeout(&mut self, poll: &mut mio::Poll, now: &Instant) {

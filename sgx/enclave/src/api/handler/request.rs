@@ -77,7 +77,9 @@ pub(crate) async fn process_ws_raw_request(
     httpc: Arc<SgxMutex<HttpcReactor>>,
     raw_req: RawRequest
 ) {
-    let ws = Arc::new(SgxMutex::new(WebSocket::new()));
+    let ws = Arc::new(SgxMutex::new(WebSocket::new(
+        deferral.clone()
+    )));
     let result = match raw_req.extract() {
         Some(req) => {
             match create_response(req.request().into()) {
@@ -113,7 +115,7 @@ pub(crate) async fn process_ws_raw_request(
                 match &result {
                     Ok(res) => {
                         conn.send_response(res);
-                        conn.websocket(Some(ws.clone()));
+                        conn.websocket(ws.clone())?;
                     }
                     Err(err) => {
                         conn.handle_error(&err);

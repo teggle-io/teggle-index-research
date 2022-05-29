@@ -85,9 +85,17 @@ impl Context {
             ));
         }
 
-        // TODO:
-
-        Ok(())
+        return match self.ws.as_ref().unwrap().lock() {
+            Ok(mut ws) => {
+                ws.send(data)
+            }
+            Err(err) => {
+                Err(Error::new_with_kind(
+                    ErrorKind::WSFault,
+                    format!("failed to acquire lock on 'ws' during Context->send: {:?}", err),
+                ))
+            }
+        };
     }
 
     // HTTP Client
