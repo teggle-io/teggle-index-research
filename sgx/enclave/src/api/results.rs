@@ -1,5 +1,7 @@
+use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::any::Any;
 use core::fmt::{Display, Formatter};
 
 use http::StatusCode;
@@ -139,4 +141,15 @@ pub(crate) fn too_many_bytes_err(bytes: usize, max_bytes: usize) -> Error {
         ErrorKind::PayloadTooLarge,
         format!("too many bytes sent ({} > {})",
                 bytes, max_bytes).to_string())
+}
+
+pub(crate) fn caught_err_to_str(err: Box<dyn Any + Send>) -> String {
+    let mut err_msg = "**UNKNOWN**";
+    if let Some(err) = err.downcast_ref::<String>() {
+        err_msg = err;
+    } else if let Some(err) = err.downcast_ref::<&'static str>() {
+        err_msg = err;
+    }
+
+    err_msg.to_string()
 }

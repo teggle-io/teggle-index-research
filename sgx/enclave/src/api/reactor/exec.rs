@@ -9,8 +9,10 @@ use futures::task::{ArcWake, waker_ref};
 use mio::{Poll, PollOpt, Ready, Registration, SetReadiness, Token};
 use mio::event::Evented;
 use std::collections::HashMap;
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::SgxMutex;
 use std::time::Instant;
+use crate::api::results::caught_err_to_str;
 
 use crate::api::server::config::Config;
 
@@ -54,33 +56,43 @@ impl ExecReactor {
     }
 
     pub(crate) fn ready(&mut self, poll: &mut mio::Poll, token: mio::Token) {
-        if let Some(task) = self.tasks.remove(&token) {
-            task.reset_readiness();
+        match panic::catch_unwind(AssertUnwindSafe(|| {
+            if let Some(task) = self.tasks.remove(&token) {
+                task.reset_readiness();
 
-            let mut future_slot = task.future.lock().unwrap();
+                let mut future_slot = task.future.lock().unwrap();
 
-            match future_slot.take() {
-                Some(mut future) => {
-                    let waker = waker_ref(&task);
-                    let context = &mut Context::from_waker(&*waker);
-                    if future.as_mut().poll(context).is_pending() {
-                        trace!("ready[{:?}]: PENDING", token);
-                        *future_slot = Some(future);
+                match future_slot.take() {
+                    Some(mut future) => {
+                        let waker = waker_ref(&task);
+                        let context = &mut Context::from_waker(&*waker);
+                        if future.as_mut().poll(context).is_pending() {
+                            trace!("ready[{:?}]: PENDING", token);
+                            *future_slot = Some(future);
 
-                        self.tasks.insert(token.clone(), task.clone());
-                        task.reregister(poll, token, Ready::readable(),
-                                        mio::PollOpt::level() | mio::PollOpt::oneshot())
-                            .unwrap();
-                    } else {
-                        trace!("ready[{:?}]: COMPLETE", token);
+                            self.tasks.insert(token.clone(), task.clone());
+                            task.reregister(poll, token, Ready::readable(),
+                                            mio::PollOpt::level() | mio::PollOpt::oneshot())
+                                .unwrap();
+                        } else {
+                            trace!("ready[{:?}]: COMPLETE", token);
+                        }
+                    }
+                    None => {
+                        trace!("ready[{:?}]: NO FUTURE", token);
                     }
                 }
-                None => {
-                    trace!("ready[{:?}]: NO FUTURE", token);
-                }
+            } else {
+                trace!("ready[{:?}]: TASK MISSING", token);
             }
-        } else {
-            trace!("ready[{:?}]: TASK MISSING", token);
+        })) {
+            Ok(_) => {},
+            Err(err) => {
+                error!("recovered from panic during exec: {}", caught_err_to_str(err));
+
+                // No further actions. Cannot surface errors here to future.
+                // TODO: Can this be improved?
+            }
         }
     }
 

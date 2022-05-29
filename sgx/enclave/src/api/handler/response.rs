@@ -129,12 +129,6 @@ impl Response {
     }
 
     #[inline]
-    pub fn fault(&mut self) -> Result<(), Error> {
-        self.error(StatusCode::INTERNAL_SERVER_ERROR,
-                   "Server Fault")
-    }
-
-    #[inline]
     pub fn encode(self) -> EncodedResponseResult {
         let mut encoded = BytesMut::new();
         let res: http::Response<()> = http::Response::from_parts(self.parts, ());
