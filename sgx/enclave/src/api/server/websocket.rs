@@ -128,10 +128,25 @@ impl WebSocket {
     ) -> Result<(), Error> {
         return match self.ws_context.read_message(tls_stream) {
             Ok(msg) => {
-                self._broadcast_msg_to_subscribers(
-                    self.context.as_ref().unwrap().clone(),
-                    Arc::new(msg)
-                )
+                return match msg {
+                    Message::Text(_)
+                    | Message::Binary(_)
+                    | Message::Pong(_) => {
+                        self._broadcast_msg_to_subscribers(
+                            self.context.as_ref().unwrap().clone(),
+                            Arc::new(msg)
+                        )
+                    }
+                    Message::Ping(_) => {
+                        if let Err(err) = self.ws_context.write_pending(tls_stream) {
+                            return Err(map_tungstenite_err!("failed to write pending to ws: {:?}", err));
+                        }
+
+                        Ok(())
+                    }
+                    Message::Close(_) => Err(Error::new_ws_closed()),
+                    Message::Frame(_) => Ok(())
+                }
             }
             Err(err) => {
                 Err(map_tungstenite_err!("failed to read ws message: {:?}", err))
