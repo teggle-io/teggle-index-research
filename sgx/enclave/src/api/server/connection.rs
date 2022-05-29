@@ -16,6 +16,7 @@ use std::io::{Read, Write};
 use std::net::Shutdown;
 use std::sync::SgxMutex;
 use std::time::Instant;
+use tungstenite::Message;
 
 use crate::api::{
     handler::request::{process_raw_request, RawRequest},
@@ -347,7 +348,28 @@ impl Connection {
                     during preparation of websocket: {:?}", err).to_string(),
                 ))
             }
-        };
+        }
+    }
+
+    #[inline]
+    pub(crate) fn ws_send(
+        &mut self,
+        msg: Message
+    ) -> Result<(), Error> {
+        return match self.ws.as_ref().unwrap().lock() {
+            Ok(mut websocket) => {
+                let mut tls_stream =
+                    mut_tls_stream(&mut self.tls_conn, &mut self.socket);
+                websocket.send_with_tls_stream(msg, &mut tls_stream)
+            }
+            Err(err) => {
+                Err(Error::new_with_kind(
+                    ErrorKind::WSFault,
+                    format!("failed to acquire lock on 'ws' \
+                    during ws_send: {:?}", err).to_string(),
+                ))
+            }
+        }
     }
 
     // Tls Session Related
@@ -564,11 +586,6 @@ impl Connection {
             warn!("TLS write failed {:?}", rc);
             self.closing = true;
         }
-    }
-
-    #[inline]
-    pub(crate) fn mut_tls_stream(&mut self) -> rustls::Stream<rustls::ServerConnection, TcpStream> {
-        mut_tls_stream(&mut self.tls_conn, &mut self.socket)
     }
 
     #[inline]

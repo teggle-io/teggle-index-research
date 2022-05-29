@@ -21,7 +21,7 @@ pub(crate) struct WebSocket {
     subscriptions: Vec<SubscriptionHandler>,
     context: Option<Arc<SgxMutex<Context>>>,
     ws_context: WebSocketContext,
-    pending: Option<Vec<Vec<u8>>>,
+    pending: Option<Vec<Message>>,
     ready: bool,
 }
 
@@ -48,13 +48,13 @@ impl WebSocket {
     }
 
     #[inline]
-    pub fn send(&mut self, data: Vec<u8>) -> Result<(), Error> {
+    pub fn send(&mut self, msg: Message) -> Result<(), Error> {
         if !self.ready {
             if self.pending.is_none() {
                 self.pending = Some(Vec::new());
             }
 
-            self.pending.as_mut().unwrap().push(data);
+            self.pending.as_mut().unwrap().push(msg);
 
             return Ok(());
         }
@@ -62,8 +62,7 @@ impl WebSocket {
         return match self.deferral.as_ref().lock() {
             Ok(mut deferral) => {
                 deferral.defer(Box::new(move |conn| {
-                    let mut tls_stream = conn.mut_tls_stream();
-                    send_websocket_frame(data, &mut tls_stream)
+                    conn.ws_send(msg)
                 }))
             }
             Err(err) => {
@@ -77,6 +76,15 @@ impl WebSocket {
     }
 
     #[inline]
+    pub fn send_with_tls_stream(
+        &mut self,
+        msg: Message,
+        tls_stream: &mut rustls::Stream<rustls::ServerConnection, TcpStream>,
+    ) -> Result<(), Error> {
+        _send_msg_to_ws(&mut self.ws_context, msg, tls_stream)
+    }
+
+    #[inline]
     pub fn activate(
         &mut self,
         tls_stream: &mut rustls::Stream<rustls::ServerConnection, TcpStream>,
@@ -86,8 +94,8 @@ impl WebSocket {
         self.ready = true;
 
         if self.pending.is_some() {
-            for p in self.pending.take().unwrap() {
-                send_websocket_frame(p, tls_stream)?;
+            for msg in self.pending.take().unwrap() {
+                _send_msg_to_ws(&mut self.ws_context, msg, tls_stream)?;
             }
         }
 
@@ -101,7 +109,7 @@ impl WebSocket {
     ) -> Result<(), Error> {
         return match self.ws_context.read_message(tls_stream) {
             Ok(msg) => {
-                self._broadcast_message(
+                self._broadcast_msg_to_subscribers(
                     self.context.as_ref().unwrap().clone(),
                     Arc::new(msg)
                 )
@@ -116,7 +124,11 @@ impl WebSocket {
     }
 
     #[inline]
-    fn _broadcast_message(&self, ctx: Arc<SgxMutex<Context>>, msg: Arc<Message>) -> Result<(), Error> {
+    fn _broadcast_msg_to_subscribers(
+        &self,
+        ctx: Arc<SgxMutex<Context>>,
+        msg: Arc<Message>
+    ) -> Result<(), Error> {
         return match self.deferral.lock() {
             Ok(mut deferral) => {
                 for sub in self.subscriptions.iter() {
@@ -140,14 +152,21 @@ impl WebSocket {
             }
         }
     }
-
 }
 
 #[inline]
-fn send_websocket_frame(
-    data: Vec<u8>,
+fn _send_msg_to_ws(
+    ws_context: &mut WebSocketContext,
+    msg: Message,
     tls_stream: &mut rustls::Stream<rustls::ServerConnection, TcpStream>,
 ) -> Result<(), Error> {
-    // TODO:
-    Ok(())
+    return match ws_context.write_message(tls_stream, msg) {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            Err(Error::new_with_kind(
+                ErrorKind::WSFault,
+                format!("failed to write ws messages: {:?}", err).to_string(),
+            ))
+        }
+    }
 }

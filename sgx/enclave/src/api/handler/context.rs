@@ -1,5 +1,5 @@
 use alloc::boxed::Box;
-use alloc::string::ToString;
+use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::any::Any;
@@ -7,6 +7,7 @@ use core::any::Any;
 use mio_httpc::{CallBuilder, Method};
 use std::collections::HashMap;
 use std::sync::SgxMutex;
+use tungstenite::Message;
 
 use crate::api::handler::request::Request;
 use crate::api::reactor::httpc::{HttpcCallFuture, HttpcReactor};
@@ -40,16 +41,19 @@ impl Context {
         }
     }
 
+    #[inline]
     pub fn request(&self) -> &Request {
         &self.request
     }
 
+    #[inline]
     pub fn request_mut(&mut self) -> &mut Request {
         &mut self.request
     }
 
     // Web Sockets
 
+    #[inline]
     pub fn is_websocket(&self) -> bool {
         self.ws.is_some() && self.request.is_websocket()
     }
@@ -77,22 +81,35 @@ impl Context {
         };
     }
 
-    pub fn send(&self, data: Vec<u8>) -> Result<(), Error> {
+    // TODO: refactor this to use From<> instead.
+
+    #[inline]
+    pub fn send_text(&self, text: String) -> Result<(), Error> {
+        self.send(Message::Text(text))
+    }
+
+    #[inline]
+    pub fn send_bin(&self, data: Vec<u8>) -> Result<(), Error> {
+        self.send(Message::Binary(data))
+    }
+
+    #[inline]
+    pub fn send(&self, msg: Message) -> Result<(), Error> {
         if !self.is_websocket() {
             return Err(Error::new_with_kind(
                 ErrorKind::WSFault,
-                format!("attempt to call Context->send when request is not a web socket"),
+                format!("attempt to call Context->send_raw when request is not a web socket"),
             ));
         }
 
         return match self.ws.as_ref().unwrap().lock() {
             Ok(mut ws) => {
-                ws.send(data)
+                ws.send(msg)
             }
             Err(err) => {
                 Err(Error::new_with_kind(
                     ErrorKind::WSFault,
-                    format!("failed to acquire lock on 'ws' during Context->send: {:?}", err),
+                    format!("failed to acquire lock on 'ws' during Context->send_raw: {:?}", err),
                 ))
             }
         };
