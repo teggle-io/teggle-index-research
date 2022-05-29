@@ -84,6 +84,11 @@ impl Context {
     // TODO: refactor this to use From<> instead.
 
     #[inline]
+    pub fn send_ping(&self, data: Vec<u8>) -> Result<(), Error> {
+        self.send(Message::Ping(data))
+    }
+
+    #[inline]
     pub fn send_text(&self, text: String) -> Result<(), Error> {
         self.send(Message::Text(text))
     }

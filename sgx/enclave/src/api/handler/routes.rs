@@ -3,6 +3,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 
 use lazy_static::lazy_static;
+use tungstenite::Message;
 
 use crate::api::handler::context::Context;
 use crate::api::handler::response::Response;
@@ -93,12 +94,26 @@ fn build_routes() -> Router {
 
     r.get("/ws", |ctx: &mut Context, _res| Box::pin(async move {
         ctx.subscribe(|ctx, msg| Box::pin(async move {
-            info!("WS MSG: {:?}", msg);
-
             match ctx.lock() {
                 Ok(ctx) => {
-                    if let Err(err) = ctx.send_bin(b"Hello, World".to_vec()) {
-                        warn!("failed to send msg: {:?}", err);
+                    match *msg {
+                        Message::Text(_)
+                        | Message::Binary(_) => {
+                            info!("WS MSG: {:?}", msg);
+
+                            if let Err(err) = ctx.send_bin(b"Hello, World".to_vec()) {
+                                warn!("failed to send msg: {:?}", err);
+                            }
+
+                            if let Err(err) = ctx.send_ping(b"PING".to_vec()) {
+                                warn!("failed to send ping: {:?}", err);
+                            }
+                        }
+                        Message::Pong(_) => {
+                            // PONG to the above ping.
+                            info!("WS PONG");
+                        }
+                        _ => {}
                     }
                 }
                 Err(err) => {
@@ -107,7 +122,6 @@ fn build_routes() -> Router {
             }
         }))?;
 
-        // TODO: Ensure this is sent AFTER the response has been sent.
         ctx.send_bin(b"Welcome".to_vec())?;
 
         Ok(())
