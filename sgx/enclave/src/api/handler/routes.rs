@@ -41,36 +41,36 @@ fn build_routes() -> Router {
             panic!("YELP");
         }));
 
-        r.post("/post", |ctx, res| Box::pin(async move {
-            let req = ctx.request();
-            let content_type: Option<String> = req.header(http::header::CONTENT_TYPE);
-            let test_val: Option<&String> = ctx.get("test");
-            let payload: TestPayload = req.json()?;
+        r.post("/post", |ctx: &mut Context, res: &mut Response|
+            Box::pin(async move {
+                let req = ctx.request();
+                let content_type: Option<String> = req.header(http::header::CONTENT_TYPE);
+                let test_val: Option<&String> = ctx.get("test");
+                let payload: TestPayload = req.json()?;
 
-            error!("Content-Type: {:?}", content_type);
-            error!("test value: {:?}", test_val);
-            error!("Payload: {:?}", payload);
+                error!("Content-Type: {:?}", content_type);
+                error!("test value: {:?}", test_val);
+                error!("Payload: {:?}", payload);
 
-            res.ok("Ok")
-        }));
+                res.ok("Ok")
+            }));
 
-        r.get("/fetch", |ctx: &mut Context,
-                         res: &mut Response,
-        | Box::pin(async move {
-            let resp = ctx.https()
-                .host("catfact.ninja")
-                .path("fact")
-                .get().await?;
+        r.get("/fetch", |ctx: &mut Context, res: &mut Response|
+            Box::pin(async move {
+                let resp = ctx.https()
+                    .host("catfact.ninja")
+                    .path("fact")
+                    .get().await?;
 
-            if let Some((_, body)) = resp {
-                res.header(http::header::CONTENT_TYPE, "application/json");
-                res.body(body);
+                if let Some((_, body)) = resp {
+                    res.header(http::header::CONTENT_TYPE, "application/json");
+                    res.body(body);
 
-                Ok(())
-            } else {
-                res.ok("No results")
-            }
-        }));
+                    Ok(())
+                } else {
+                    res.ok("No results")
+                }
+            }));
     });
 
     r.get("/ping", |_ctx, res| Box::pin(async move {

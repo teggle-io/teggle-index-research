@@ -71,8 +71,8 @@ impl HttpCodec {
             let mut parsed_headers = [httparse::EMPTY_HEADER; 16];
             let mut r = httparse::Request::new(&mut parsed_headers);
             let status = r.parse(src).map_err(|e| {
-                let msg = format!("failed to parse http request: {:?}", e);
-                return Error::new_with_kind(ErrorKind::DecodeFault, msg);
+                return Error::new_with_kind(ErrorKind::DecodeFault,
+                                            format!("failed to parse http request: {:?}", e));
             })?;
 
             let amt = match status {
