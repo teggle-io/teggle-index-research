@@ -26,7 +26,12 @@ impl HttpCodec {
         Self { server: server.to_string() }
     }
 
-    pub(crate) fn encode(&self, item: Response<Vec<u8>>, dst: &mut BytesMut) -> Result<(), Error> {
+    pub(crate) fn encode(
+        &self,
+        item: Response<()>,
+        dst: &mut BytesMut,
+        content_length: usize
+    ) -> Result<(), Error> {
         use std::fmt::Write;
 
         write!(
@@ -40,7 +45,7 @@ impl HttpCodec {
             item.version(),
             item.status(),
             self.server,
-            item.body().len(),
+            content_length,
             date::now()
         ).map_err(|e| {
             Error::new_with_kind(ErrorKind::EncodeFault, e.to_string())
@@ -54,7 +59,6 @@ impl HttpCodec {
         }
 
         dst.extend_from_slice(b"\r\n");
-        dst.extend_from_slice(item.body().as_slice());
 
         Ok(())
     }

@@ -1,6 +1,7 @@
 use alloc::string::{String, ToString};
-use core::fmt::{Display, Formatter};
 use alloc::vec::Vec;
+use core::fmt::{Display, Formatter};
+
 use http::StatusCode;
 
 pub(crate) type EncodedResponseResult = Result<ResponseBody, Error>;
@@ -8,7 +9,7 @@ pub(crate) type EncodedResponseResult = Result<ResponseBody, Error>;
 #[derive(Clone)]
 pub struct ResponseBody {
     body: Vec<u8>,
-    close: bool
+    close: bool,
 }
 
 impl ResponseBody {
@@ -21,7 +22,7 @@ impl ResponseBody {
     pub fn dummy() -> Self {
         Self {
             body: b"HTTP/1.1 200 OK\r\nServer: index.teggle.io/v1beta1\r\nContent-Length: 18\r\nDate: TODO\r\ncontent-type: application/json\r\n\r\n{\"message\":\"PONG\"}".to_vec(),
-            close: true
+            close: true,
         }
     }
 
@@ -48,6 +49,8 @@ pub enum ErrorKind {
     ServerFault,
     // Web Socket fault.
     WSFault,
+    // Web Socket closed.
+    WSClosed,
     // Timed out.
     TimedOut,
     // Too big.
@@ -67,6 +70,7 @@ impl Display for ErrorKind {
             ErrorKind::DecodeFault => write!(f, "DecodeFault"),
             ErrorKind::ServerFault => write!(f, "ServerFault"),
             ErrorKind::WSFault => write!(f, "WSFault"),
+            ErrorKind::WSClosed => write!(f, "WSClosed"),
             ErrorKind::TimedOut => write!(f, "TimedOut"),
             ErrorKind::PayloadTooLarge => write!(f, "PayloadTooLarge"),
             ErrorKind::ExecError => write!(f, "ExecError"),
@@ -94,18 +98,30 @@ impl Error {
         }
     }
 
+    pub fn new_ws_closed() -> Self {
+        Self {
+            kind: ErrorKind::WSClosed,
+            message: "".to_string(),
+        }
+    }
+
     pub fn http_status(&self) -> StatusCode {
         match self.kind {
             ErrorKind::EncodeFault => StatusCode::INTERNAL_SERVER_ERROR,
             ErrorKind::DecodeFault => StatusCode::INTERNAL_SERVER_ERROR,
             ErrorKind::ServerFault => StatusCode::INTERNAL_SERVER_ERROR,
             ErrorKind::WSFault => StatusCode::BAD_REQUEST,
+            ErrorKind::WSClosed => StatusCode::IM_USED,
             ErrorKind::TimedOut => StatusCode::REQUEST_TIMEOUT,
             ErrorKind::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             ErrorKind::ExecError => StatusCode::BAD_GATEWAY,
             ErrorKind::HttpClientError => StatusCode::BAD_GATEWAY,
             ErrorKind::HttpClientTimedOut => StatusCode::GATEWAY_TIMEOUT,
         }
+    }
+
+    pub fn kind(&self) -> ErrorKind {
+        self.kind
     }
 }
 
@@ -116,9 +132,7 @@ impl Display for Error {
     }
 }
 
-impl std::error::Error for Error {
-
-}
+impl std::error::Error for Error {}
 
 pub(crate) fn too_many_bytes_err(bytes: usize, max_bytes: usize) -> Error {
     Error::new_with_kind(

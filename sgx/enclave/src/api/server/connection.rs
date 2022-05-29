@@ -385,10 +385,12 @@ impl Connection {
 
     #[inline]
     pub(crate) fn handle_error(&mut self, err: &Error) {
-        // Abort
-        self.closing = true;
-
         if self.is_websocket() {
+            if let ErrorKind::WSClosed = err.kind() {
+                self.closing = true;
+                return;
+            }
+
             // Not a standard request.
             warn!("error occurred during websocket request: {}", err);
             return;

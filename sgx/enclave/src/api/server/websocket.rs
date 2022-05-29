@@ -8,6 +8,8 @@ use mio::net::TcpStream;
 use std::sync::SgxMutex;
 use tungstenite::Message;
 use tungstenite::protocol::{Role, WebSocketConfig, WebSocketContext};
+use tungstenite::Error as TungsteniteError;
+use tungstenite::error::ProtocolError;
 
 use crate::api::handler::context::Context;
 use crate::api::results::{Error, ErrorKind};
@@ -15,6 +17,18 @@ use crate::api::server::connection::Deferral;
 
 pub(crate) type SubscriptionHandler = Arc<dyn Send + Sync + Fn(Arc<SgxMutex<Context>>, Arc<Message>) -> BoxFuture<'static, ()>>;
 pub(crate) type SubscriptionHandlerFn = fn(Arc<SgxMutex<Context>>, Arc<Message>) -> BoxFuture<'static, ()>;
+
+macro_rules! map_tungstenite_err(($fmt:literal, $err:expr) => {
+    match $err {
+        TungsteniteError::ConnectionClosed
+        | TungsteniteError::AlreadyClosed
+        | TungsteniteError::Protocol(ProtocolError::SendAfterClosing)
+        | TungsteniteError::Protocol(ProtocolError::ReceivedAfterClosing) => Error::new_ws_closed(),
+        _ => {
+            Error::new_with_kind(ErrorKind::WSFault, format!($fmt, $err))
+        }
+    }
+});
 
 pub(crate) struct WebSocket {
     deferral: Arc<SgxMutex<Deferral>>,
@@ -81,7 +95,12 @@ impl WebSocket {
         msg: Message,
         tls_stream: &mut rustls::Stream<rustls::ServerConnection, TcpStream>,
     ) -> Result<(), Error> {
-        _send_msg_to_ws(&mut self.ws_context, msg, tls_stream)
+        return match self.ws_context.write_message(tls_stream, msg) {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                Err(map_tungstenite_err!("failed to write ws message: {:?}", err))
+            }
+        }
     }
 
     #[inline]
@@ -95,7 +114,7 @@ impl WebSocket {
 
         if self.pending.is_some() {
             for msg in self.pending.take().unwrap() {
-                _send_msg_to_ws(&mut self.ws_context, msg, tls_stream)?;
+                self.send_with_tls_stream(msg, tls_stream)?;
             }
         }
 
@@ -115,10 +134,7 @@ impl WebSocket {
                 )
             }
             Err(err) => {
-                Err(Error::new_with_kind(
-                    ErrorKind::WSFault,
-                    format!("failed to read ws message: {:?}", err),
-                ))
+                Err(map_tungstenite_err!("failed to read ws message: {:?}", err))
             }
         };
     }
@@ -150,23 +166,6 @@ impl WebSocket {
                             during Websocket->handle: {:?}", err).to_string(),
                 ))
             }
-        }
-    }
-}
-
-#[inline]
-fn _send_msg_to_ws(
-    ws_context: &mut WebSocketContext,
-    msg: Message,
-    tls_stream: &mut rustls::Stream<rustls::ServerConnection, TcpStream>,
-) -> Result<(), Error> {
-    return match ws_context.write_message(tls_stream, msg) {
-        Ok(_) => Ok(()),
-        Err(err) => {
-            Err(Error::new_with_kind(
-                ErrorKind::WSFault,
-                format!("failed to write ws messages: {:?}", err).to_string(),
-            ))
         }
     }
 }

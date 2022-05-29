@@ -136,18 +136,22 @@ impl Response {
 
     #[inline]
     pub fn encode(self) -> EncodedResponseResult {
-        match self.body_bytes {
-            Some(body) => {
-                let mut encoded = BytesMut::new();
-                let res: http::Response<Vec<u8>> = http::Response::from_parts(self.parts, body);
+        let mut encoded = BytesMut::new();
+        let res: http::Response<()> = http::Response::from_parts(self.parts, ());
 
-                match GLOBAL_CODEC.encode(res, &mut encoded) {
-                    Ok(_) => Ok(ResponseBody::new_with_close(encoded.to_vec(), self.close)),
-                    Err(e) => Err(Error::new(e.to_string()))
+        let body = self.body_bytes.or(Some(Vec::new())).unwrap();
+        let content_length = if body.len() > 0 { body.len() + 2 } else { 0 };
+
+        match GLOBAL_CODEC.encode(res, &mut encoded, content_length) {
+            Ok(_) => {
+                if body.len() > 0 {
+                    encoded.extend_from_slice(body.as_slice());
+                    encoded.extend_from_slice(b"\r\n");
                 }
-            }
-            None => Err(Error::new(
-                "encode called on response with no body".to_string()))
+
+                Ok(ResponseBody::new_with_close(encoded.to_vec(), self.close))
+            },
+            Err(e) => Err(Error::new(e.to_string()))
         }
     }
 }
